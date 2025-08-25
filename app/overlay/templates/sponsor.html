@@ -1,0 +1,670 @@
+<!-- Sponsor Overlay Template -->
+<div id="{{ overlay_id | default(overlay.id) }}" class="sponsor-overlay overlay-container hidden" 
+     style="left: {{ overlay.position.x }}px; top: {{ overlay.position.y }}px; z-index: {{ overlay.position.z_index }};">
+    
+    <!-- Main sponsor card container -->
+    <div class="sponsor-card">
+        <!-- Background gradient overlay -->
+        <div class="sponsor-bg"></div>
+        
+        <!-- Sponsor content -->
+        <div class="sponsor-content">
+            <!-- Logo section -->
+            <div class="sponsor-logo-section">
+                <div class="sponsor-logo-container">
+                    {% if content.template_variables.sponsor_logo %}
+                    <img src="{{ content.template_variables.sponsor_logo }}" 
+                         alt="{{ content.template_variables.sponsor_name | default('Sponsor') }}" 
+                         class="sponsor-logo"
+                         data-variable="sponsor_logo">
+                    {% else %}
+                    <div class="sponsor-logo-placeholder">
+                        <span data-variable="sponsor_name">{{ content.template_variables.sponsor_name | default('Sponsor') }}</span>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+            
+            <!-- Information section -->
+            <div class="sponsor-info">
+                <div class="sponsor-header">
+                    <span class="sponsor-label">Sponsored by</span>
+                </div>
+                
+                <h3 class="sponsor-name" data-variable="sponsor_name">
+                    {{ content.template_variables.sponsor_name | default('Our Sponsor') }}
+                </h3>
+                
+                {% if content.template_variables.sponsor_message %}
+                <p class="sponsor-message" data-variable="sponsor_message">
+                    {{ content.template_variables.sponsor_message }}
+                </p>
+                {% endif %}
+                
+                {% if content.template_variables.sponsor_url %}
+                <div class="sponsor-url">
+                    <span class="sponsor-url-label">Visit:</span>
+                    <span class="sponsor-url-text" data-variable="sponsor_url">
+                        {{ content.template_variables.sponsor_url | replace('https://', '') | replace('http://', '') }}
+                    </span>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+        
+        <!-- Animated elements -->
+        <div class="sponsor-decorations">
+            <!-- Animated dots -->
+            <div class="sponsor-dot sponsor-dot-1"></div>
+            <div class="sponsor-dot sponsor-dot-2"></div>
+            <div class="sponsor-dot sponsor-dot-3"></div>
+            
+            <!-- Animated lines -->
+            <div class="sponsor-line sponsor-line-1"></div>
+            <div class="sponsor-line sponsor-line-2"></div>
+        </div>
+        
+        <!-- Progress bar for rotation timing (optional) -->
+        <div class="sponsor-progress-container">
+            <div class="sponsor-progress-bar">
+                <div class="sponsor-progress-fill"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+    /* Sponsor Overlay Styles */
+    .sponsor-overlay {
+        font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+        width: 350px;
+        min-height: 120px;
+        opacity: 0;
+        transform: translateX(100px) scale(0.9);
+        transition: all 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+    }
+    
+    .sponsor-overlay.visible {
+        opacity: 1;
+        transform: translateX(0) scale(1);
+    }
+    
+    /* Main sponsor card */
+    .sponsor-card {
+        position: relative;
+        background: linear-gradient(135deg, 
+            rgba(255, 255, 255, 0.95) 0%, 
+            rgba(255, 255, 255, 0.9) 100%);
+        border: 1px solid rgba(255, 255, 255, 0.3);
+        border-radius: 16px;
+        padding: 20px;
+        box-shadow: 
+            0 10px 30px rgba(0, 0, 0, 0.3),
+            0 1px 8px rgba(0, 0, 0, 0.2),
+            inset 0 1px 0 rgba(255, 255, 255, 0.8);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        overflow: hidden;
+    }
+    
+    /* Background gradient */
+    .sponsor-bg {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: linear-gradient(135deg, 
+            rgba(99, 102, 241, 0.1) 0%,
+            rgba(139, 92, 246, 0.1) 50%,
+            rgba(236, 72, 153, 0.1) 100%);
+        border-radius: 16px;
+        opacity: 0.6;
+    }
+    
+    /* Content layout */
+    .sponsor-content {
+        position: relative;
+        z-index: 2;
+        display: flex;
+        align-items: center;
+        gap: 16px;
+    }
+    
+    /* Logo section */
+    .sponsor-logo-section {
+        flex-shrink: 0;
+    }
+    
+    .sponsor-logo-container {
+        width: 60px;
+        height: 60px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(255, 255, 255, 0.9);
+        border-radius: 12px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    }
+    
+    .sponsor-logo {
+        max-width: 50px;
+        max-height: 50px;
+        object-fit: contain;
+        border-radius: 8px;
+    }
+    
+    .sponsor-logo-placeholder {
+        width: 50px;
+        height: 50px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        font-weight: 700;
+        font-size: 14px;
+        text-align: center;
+        border-radius: 8px;
+        text-transform: uppercase;
+    }
+    
+    /* Information section */
+    .sponsor-info {
+        flex: 1;
+        min-width: 0;
+    }
+    
+    .sponsor-header {
+        margin-bottom: 4px;
+    }
+    
+    .sponsor-label {
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.8px;
+        color: rgba(0, 0, 0, 0.6);
+        background: linear-gradient(135deg, #667eea, #764ba2);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+    }
+    
+    .sponsor-name {
+        margin: 0 0 6px 0;
+        font-size: 18px;
+        font-weight: 700;
+        color: #1a1a1a;
+        line-height: 1.2;
+        text-shadow: 0 1px 2px rgba(255, 255, 255, 0.8);
+    }
+    
+    .sponsor-message {
+        margin: 0 0 8px 0;
+        font-size: 13px;
+        font-weight: 500;
+        color: rgba(0, 0, 0, 0.7);
+        line-height: 1.3;
+        max-height: 2.6em;
+        overflow: hidden;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+    }
+    
+    .sponsor-url {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        color: rgba(0, 0, 0, 0.8);
+    }
+    
+    .sponsor-url-label {
+        font-weight: 600;
+        color: rgba(0, 0, 0, 0.6);
+    }
+    
+    .sponsor-url-text {
+        font-weight: 500;
+        background: linear-gradient(135deg, #667eea, #764ba2);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+    }
+    
+    /* Animated decorations */
+    .sponsor-decorations {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        pointer-events: none;
+        overflow: hidden;
+        border-radius: 16px;
+    }
+    
+    .sponsor-dot {
+        position: absolute;
+        width: 4px;
+        height: 4px;
+        background: linear-gradient(135deg, rgba(99, 102, 241, 0.6), rgba(139, 92, 246, 0.6));
+        border-radius: 50%;
+        animation: float 6s ease-in-out infinite;
+    }
+    
+    .sponsor-dot-1 {
+        top: 20%;
+        right: 15%;
+        animation-delay: 0s;
+    }
+    
+    .sponsor-dot-2 {
+        top: 60%;
+        right: 8%;
+        animation-delay: 2s;
+        width: 3px;
+        height: 3px;
+    }
+    
+    .sponsor-dot-3 {
+        bottom: 25%;
+        right: 20%;
+        animation-delay: 4s;
+        width: 2px;
+        height: 2px;
+    }
+    
+    .sponsor-line {
+        position: absolute;
+        background: linear-gradient(90deg, 
+            transparent 0%, 
+            rgba(99, 102, 241, 0.3) 50%, 
+            transparent 100%);
+        height: 1px;
+        animation: shimmer 8s linear infinite;
+    }
+    
+    .sponsor-line-1 {
+        top: 30%;
+        left: 0;
+        right: 0;
+        animation-delay: 1s;
+    }
+    
+    .sponsor-line-2 {
+        bottom: 40%;
+        left: 0;
+        right: 0;
+        animation-delay: 5s;
+        opacity: 0.5;
+    }
+    
+    /* Progress bar for rotation timing */
+    .sponsor-progress-container {
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        height: 2px;
+        border-radius: 0 0 16px 16px;
+        overflow: hidden;
+        opacity: 0.7;
+    }
+    
+    .sponsor-progress-bar {
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.1);
+    }
+    
+    .sponsor-progress-fill {
+        height: 100%;
+        width: 0%;
+        background: linear-gradient(90deg, #667eea, #764ba2);
+        transition: width 1s linear;
+    }
+    
+    /* Animations */
+    @keyframes float {
+        0%, 100% {
+            transform: translateY(0px);
+            opacity: 0.6;
+        }
+        50% {
+            transform: translateY(-8px);
+            opacity: 1;
+        }
+    }
+    
+    @keyframes shimmer {
+        0% {
+            transform: translateX(-100%);
+        }
+        100% {
+            transform: translateX(200%);
+        }
+    }
+    
+    /* Entrance animations */
+    .sponsor-overlay.slide-in-right {
+        animation: sponsorSlideInRight 0.6s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+    }
+    
+    .sponsor-overlay.slide-in-left {
+        animation: sponsorSlideInLeft 0.6s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+    }
+    
+    .sponsor-overlay.fade-in {
+        animation: sponsorFadeIn 0.5s ease-out forwards;
+    }
+    
+    .sponsor-overlay.zoom-in {
+        animation: sponsorZoomIn 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+    }
+    
+    /* Exit animations */
+    .sponsor-overlay.slide-out-right {
+        animation: sponsorSlideOutRight 0.4s ease-in forwards;
+    }
+    
+    .sponsor-overlay.slide-out-left {
+        animation: sponsorSlideOutLeft 0.4s ease-in forwards;
+    }
+    
+    .sponsor-overlay.fade-out {
+        animation: sponsorFadeOut 0.4s ease-in forwards;
+    }
+    
+    .sponsor-overlay.zoom-out {
+        animation: sponsorZoomOut 0.3s ease-in forwards;
+    }
+    
+    @keyframes sponsorSlideInRight {
+        0% {
+            opacity: 0;
+            transform: translateX(100px) scale(0.9);
+        }
+        100% {
+            opacity: 1;
+            transform: translateX(0) scale(1);
+        }
+    }
+    
+    @keyframes sponsorSlideInLeft {
+        0% {
+            opacity: 0;
+            transform: translateX(-100px) scale(0.9);
+        }
+        100% {
+            opacity: 1;
+            transform: translateX(0) scale(1);
+        }
+    }
+    
+    @keyframes sponsorSlideOutRight {
+        0% {
+            opacity: 1;
+            transform: translateX(0) scale(1);
+        }
+        100% {
+            opacity: 0;
+            transform: translateX(100px) scale(0.9);
+        }
+    }
+    
+    @keyframes sponsorSlideOutLeft {
+        0% {
+            opacity: 1;
+            transform: translateX(0) scale(1);
+        }
+        100% {
+            opacity: 0;
+            transform: translateX(-100px) scale(0.9);
+        }
+    }
+    
+    @keyframes sponsorFadeIn {
+        0% {
+            opacity: 0;
+            transform: scale(0.95);
+        }
+        100% {
+            opacity: 1;
+            transform: scale(1);
+        }
+    }
+    
+    @keyframes sponsorFadeOut {
+        0% {
+            opacity: 1;
+            transform: scale(1);
+        }
+        100% {
+            opacity: 0;
+            transform: scale(0.95);
+        }
+    }
+    
+    @keyframes sponsorZoomIn {
+        0% {
+            opacity: 0;
+            transform: scale(0.3);
+        }
+        50% {
+            transform: scale(1.05);
+        }
+        100% {
+            opacity: 1;
+            transform: scale(1);
+        }
+    }
+    
+    @keyframes sponsorZoomOut {
+        0% {
+            opacity: 1;
+            transform: scale(1);
+        }
+        100% {
+            opacity: 0;
+            transform: scale(0.3);
+        }
+    }
+    
+    /* Responsive adjustments */
+    @media (max-width: 1366px) {
+        .sponsor-overlay {
+            width: 300px;
+        }
+        
+        .sponsor-card {
+            padding: 16px;
+        }
+        
+        .sponsor-logo-container {
+            width: 50px;
+            height: 50px;
+        }
+        
+        .sponsor-logo {
+            max-width: 40px;
+            max-height: 40px;
+        }
+        
+        .sponsor-name {
+            font-size: 16px;
+        }
+        
+        .sponsor-message {
+            font-size: 12px;
+        }
+    }
+    
+    /* Dark theme variant */
+    .sponsor-overlay.dark {
+        .sponsor-card {
+            background: linear-gradient(135deg, 
+                rgba(0, 0, 0, 0.9) 0%, 
+                rgba(20, 20, 20, 0.95) 100%);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .sponsor-name {
+            color: #ffffff;
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+        }
+        
+        .sponsor-message {
+            color: rgba(255, 255, 255, 0.8);
+        }
+        
+        .sponsor-url {
+            color: rgba(255, 255, 255, 0.9);
+        }
+        
+        .sponsor-url-label {
+            color: rgba(255, 255, 255, 0.6);
+        }
+        
+        .sponsor-logo-container {
+            background: rgba(0, 0, 0, 0.3);
+        }
+    }
+</style>
+
+<script>
+    // Sponsor overlay specific functionality
+    (function() {
+        const sponsorOverlay = document.getElementById('{{ overlay_id | default(overlay.id) }}');
+        if (!sponsorOverlay) return;
+        
+        let rotationTimer = null;
+        let progressAnimation = null;
+        
+        // Progress bar animation
+        function animateProgress(duration) {
+            const progressFill = sponsorOverlay.querySelector('.sponsor-progress-fill');
+            if (progressFill) {
+                progressFill.style.width = '0%';
+                progressFill.style.transition = `width ${duration}s linear`;
+                
+                // Trigger animation after a small delay
+                setTimeout(() => {
+                    progressFill.style.width = '100%';
+                }, 100);
+            }
+        }
+        
+        // Show sponsor with progress animation
+        function showSponsor(content, duration) {
+            // Update content
+            if (content) {
+                window.StreamOpsOverlay.updateOverlayContent(sponsorOverlay, content);
+            }
+            
+            // Show overlay
+            sponsorOverlay.classList.remove('hidden');
+            sponsorOverlay.classList.add('visible');
+            
+            // Start progress animation if duration provided
+            if (duration) {
+                animateProgress(duration);
+                
+                // Auto hide after duration
+                rotationTimer = setTimeout(() => {
+                    hideSponsor();
+                }, duration * 1000);
+            }
+        }
+        
+        // Hide sponsor
+        function hideSponsor(animation = 'slide-out-right') {
+            sponsorOverlay.classList.add(animation);
+            
+            setTimeout(() => {
+                sponsorOverlay.classList.remove('visible', animation);
+                sponsorOverlay.classList.add('hidden');
+                
+                // Reset progress bar
+                const progressFill = sponsorOverlay.querySelector('.sponsor-progress-fill');
+                if (progressFill) {
+                    progressFill.style.width = '0%';
+                    progressFill.style.transition = 'none';
+                }
+            }, 400);
+            
+            if (rotationTimer) {
+                clearTimeout(rotationTimer);
+                rotationTimer = null;
+            }
+        }
+        
+        // Update sponsor information
+        function updateSponsor(content, animated = true) {
+            if (animated) {
+                sponsorOverlay.style.opacity = '0.5';
+                setTimeout(() => {
+                    window.StreamOpsOverlay.updateOverlayContent(sponsorOverlay, content);
+                    sponsorOverlay.style.opacity = '1';
+                }, 200);
+            } else {
+                window.StreamOpsOverlay.updateOverlayContent(sponsorOverlay, content);
+            }
+        }
+        
+        // Pulse effect for emphasis
+        function pulseSponsor() {
+            sponsorOverlay.classList.add('zoom-in');
+            setTimeout(() => {
+                sponsorOverlay.classList.remove('zoom-in');
+            }, 600);
+        }
+        
+        // Handle click events (if clickable)
+        sponsorOverlay.addEventListener('click', function() {
+            const sponsorUrl = sponsorOverlay.querySelector('[data-variable="sponsor_url"]');
+            if (sponsorUrl && sponsorUrl.textContent) {
+                // Flash effect on click
+                pulseSponsor();
+                
+                // Track click event
+                if (window.StreamOpsOverlay) {
+                    window.StreamOpsOverlay.sendMessage({
+                        type: 'sponsor_click',
+                        overlay_id: '{{ overlay_id | default(overlay.id) }}',
+                        sponsor_url: sponsorUrl.textContent,
+                        timestamp: new Date().toISOString()
+                    });
+                }
+                
+                console.log('Sponsor clicked:', sponsorUrl.textContent);
+            }
+        });
+        
+        // Expose sponsor control functions globally
+        const overlayId = '{{ overlay_id | default(overlay.id) }}';
+        const globalKey = 'sponsor_' + overlayId.replace(/[-\s]/g, '_');
+        
+        window[globalKey] = {
+            show: showSponsor,
+            hide: hideSponsor,
+            update: updateSponsor,
+            pulse: pulseSponsor,
+            element: sponsorOverlay
+        };
+        
+        // Also add to main overlay control if available
+        if (window.overlay_{{ overlay_id | default(overlay.id) | replace('-', '_') }}) {
+            Object.assign(window.overlay_{{ overlay_id | default(overlay.id) | replace('-', '_') }}, {
+                showSponsor: showSponsor,
+                hideSponsor: hideSponsor,
+                updateSponsor: updateSponsor,
+                pulseSponsor: pulseSponsor
+            });
+        }
+        
+        console.log('Sponsor overlay initialized:', overlayId);
+    })();
+</script>

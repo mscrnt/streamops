@@ -1,0 +1,121 @@
+# Default rule pack for StreamOps
+# These rules are loaded on first run
+
+rules:
+  - name: "Remux MKV to MOV and Move to Editing"
+    enabled: true
+    priority: 100
+    when:
+      event: file.closed
+      path_glob: "/mnt/drive_*/Recordings/**/*.mkv"
+      min_quiet_seconds: 45
+    do:
+      - type: ffmpeg_remux
+        params:
+          container: mov
+          faststart: true
+      - type: move
+        params:
+          dest: "/mnt/drive_f/Editing/{Game}/{YYYY}/{MM}/{DD}/"
+      - type: index_asset
+        params: {}
+      - type: make_proxies_if
+        params:
+          min_duration_sec: 900
+          codec: dnxhr_lb
+      - type: thumbs
+        params: {}
+
+  - name: "Process MP4 Recordings"
+    enabled: true
+    priority: 90
+    when:
+      event: file.closed
+      path_glob: "/mnt/drive_*/Recordings/**/*.mp4"
+      min_quiet_seconds: 45
+    do:
+      - type: move
+        params:
+          dest: "/mnt/drive_f/Editing/{Game}/{YYYY}/{MM}/{DD}/"
+      - type: index_asset
+        params: {}
+      - type: make_proxies_if
+        params:
+          min_duration_sec: 900
+          codec: dnxhr_lb
+      - type: thumbs
+        params: {}
+
+  - name: "Archive Old Recordings"
+    enabled: false
+    priority: 50
+    when:
+      event: asset.aged
+      conditions:
+        age_days: {"$gte": 90}
+        status: "indexed"
+    do:
+      - type: transcode_preset
+        params:
+          preset: archive_h265
+      - type: move
+        params:
+          dest: "/mnt/drive_f/Archive/{YYYY}/{MM}/"
+      - type: tag
+        params:
+          tags: ["archived"]
+
+  - name: "Generate Social Clips"
+    enabled: false
+    priority: 60
+    when:
+      event: clip.marked
+      conditions:
+        duration_sec: {"$lte": 60}
+    do:
+      - type: transcode_preset
+        params:
+          preset: social_9x16
+      - type: copy
+        params:
+          dest: "/mnt/drive_f/Social/{Game}/{YYYY}-{MM}-{DD}/"
+      - type: tag
+        params:
+          tags: ["social", "clip"]
+
+  - name: "Process Stream Highlights"
+    enabled: true
+    priority: 80
+    when:
+      event: session.ended
+      conditions:
+        duration_sec: {"$gte": 3600}
+        has_markers: true
+    do:
+      - type: index_asset
+        params: {}
+      - type: thumbs
+        params: {}
+      - type: custom_hook
+        params:
+          command: "echo 'Stream ended: {session_id}' >> /data/logs/streams.log"
+
+  - name: "Quick Preview Generation"
+    enabled: true
+    priority: 70
+    when:
+      any:
+        - event: file.closed
+          path_glob: "/mnt/drive_*/QuickClips/**/*"
+        - event: manual.trigger
+          conditions:
+            type: preview
+    do:
+      - type: thumbs
+        params: {}
+      - type: transcode_preset
+        params:
+          preset: web_720p
+      - type: tag
+        params:
+          tags: ["preview", "quick"]

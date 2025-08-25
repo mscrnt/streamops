@@ -1,0 +1,16 @@
+#!/command/with-contenv sh
+# Start worker process
+
+# Check role
+if [ "${ROLE}" = "api" ] || [ "${ROLE}" = "overlay" ]; then
+    echo "Worker disabled for role: ${ROLE}"
+    exec sleep infinity
+fi
+
+# Wait for API and NATS
+echo "Waiting for API and NATS to be ready..."
+sleep 10
+
+echo "Starting StreamOps Worker..."
+cd /opt/streamops
+exec python -m app.worker.main

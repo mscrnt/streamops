@@ -1,0 +1,871 @@
+<!-- Alert Overlay Template -->
+<div id="{{ overlay_id | default(overlay.id) }}" class="alert-overlay overlay-container hidden" 
+     style="left: {{ overlay.position.x }}px; top: {{ overlay.position.y }}px; z-index: {{ overlay.position.z_index }};">
+    
+    <!-- Main alert container -->
+    <div class="alert-card {{ content.template_variables.alert_type | default('info') }}">
+        <!-- Background effects -->
+        <div class="alert-bg-effects">
+            <!-- Animated gradient background -->
+            <div class="alert-bg-gradient"></div>
+            
+            <!-- Particle effects -->
+            <div class="alert-particles">
+                <div class="alert-particle alert-particle-1"></div>
+                <div class="alert-particle alert-particle-2"></div>
+                <div class="alert-particle alert-particle-3"></div>
+                <div class="alert-particle alert-particle-4"></div>
+                <div class="alert-particle alert-particle-5"></div>
+            </div>
+            
+            <!-- Animated border glow -->
+            <div class="alert-border-glow"></div>
+        </div>
+        
+        <!-- Alert content -->
+        <div class="alert-content">
+            <!-- Icon section -->
+            <div class="alert-icon-section">
+                <div class="alert-icon-container">
+                    <div class="alert-icon">
+                        <!-- Icon will be set via CSS based on alert type -->
+                        <span class="alert-icon-symbol"></span>
+                    </div>
+                </div>
+                
+                <!-- Animated rings around icon -->
+                <div class="alert-icon-rings">
+                    <div class="alert-ring alert-ring-1"></div>
+                    <div class="alert-ring alert-ring-2"></div>
+                    <div class="alert-ring alert-ring-3"></div>
+                </div>
+            </div>
+            
+            <!-- Text section -->
+            <div class="alert-text-section">
+                <div class="alert-header">
+                    <span class="alert-type-label" data-variable="alert_type_label">
+                        {{ content.template_variables.alert_type | default('Info') | title }}
+                    </span>
+                </div>
+                
+                <div class="alert-message" data-variable="alert_text">
+                    {{ content.template_variables.alert_text | default('Alert message') }}
+                </div>
+                
+                {% if content.template_variables.alert_subtitle %}
+                <div class="alert-subtitle" data-variable="alert_subtitle">
+                    {{ content.template_variables.alert_subtitle }}
+                </div>
+                {% endif %}
+            </div>
+            
+            <!-- Action buttons (optional) -->
+            {% if content.template_variables.alert_actions %}
+            <div class="alert-actions">
+                {% for action in content.template_variables.alert_actions %}
+                <button class="alert-action-btn" data-action="{{ action.action }}">
+                    {{ action.label }}
+                </button>
+                {% endfor %}
+            </div>
+            {% endif %}
+        </div>
+        
+        <!-- Progress bar for auto-dismiss -->
+        {% if content.template_variables.duration %}
+        <div class="alert-progress-container">
+            <div class="alert-progress-bar">
+                <div class="alert-progress-fill"></div>
+            </div>
+        </div>
+        {% endif %}
+        
+        <!-- Close button (optional) -->
+        <button class="alert-close-btn" aria-label="Close alert">
+            <span class="alert-close-icon">×</span>
+        </button>
+    </div>
+</div>
+
+<style>
+    /* Alert Overlay Base Styles */
+    .alert-overlay {
+        font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+        width: 400px;
+        min-height: 100px;
+        opacity: 0;
+        transform: translateY(-50px) scale(0.9);
+        transition: all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+        filter: drop-shadow(0 20px 40px rgba(0, 0, 0, 0.3));
+    }
+    
+    .alert-overlay.visible {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+    
+    /* Main alert card */
+    .alert-card {
+        position: relative;
+        background: rgba(255, 255, 255, 0.95);
+        border-radius: 16px;
+        padding: 24px;
+        box-shadow: 
+            0 20px 60px rgba(0, 0, 0, 0.3),
+            0 8px 32px rgba(0, 0, 0, 0.2),
+            inset 0 1px 0 rgba(255, 255, 255, 0.9);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        overflow: hidden;
+        border: 2px solid transparent;
+    }
+    
+    /* Background effects container */
+    .alert-bg-effects {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        pointer-events: none;
+        border-radius: 16px;
+        overflow: hidden;
+    }
+    
+    .alert-bg-gradient {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        opacity: 0.1;
+        background: linear-gradient(135deg, 
+            var(--alert-primary-color) 0%,
+            var(--alert-secondary-color) 100%);
+        animation: gradientShift 8s ease-in-out infinite;
+    }
+    
+    /* Particle effects */
+    .alert-particles {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+    }
+    
+    .alert-particle {
+        position: absolute;
+        width: 4px;
+        height: 4px;
+        background: var(--alert-primary-color);
+        border-radius: 50%;
+        opacity: 0.6;
+        animation: particleFloat 6s ease-in-out infinite;
+    }
+    
+    .alert-particle-1 { top: 20%; left: 10%; animation-delay: 0s; }
+    .alert-particle-2 { top: 60%; left: 20%; animation-delay: 1.2s; width: 3px; height: 3px; }
+    .alert-particle-3 { top: 30%; right: 15%; animation-delay: 2.4s; width: 2px; height: 2px; }
+    .alert-particle-4 { bottom: 25%; right: 25%; animation-delay: 3.6s; }
+    .alert-particle-5 { bottom: 45%; left: 30%; animation-delay: 4.8s; width: 3px; height: 3px; }
+    
+    /* Border glow effect */
+    .alert-border-glow {
+        position: absolute;
+        top: -2px;
+        left: -2px;
+        right: -2px;
+        bottom: -2px;
+        background: linear-gradient(45deg, 
+            var(--alert-primary-color),
+            var(--alert-secondary-color),
+            var(--alert-primary-color));
+        border-radius: 18px;
+        opacity: 0.3;
+        animation: borderPulse 3s ease-in-out infinite;
+        z-index: -1;
+    }
+    
+    /* Content layout */
+    .alert-content {
+        position: relative;
+        z-index: 2;
+        display: flex;
+        align-items: flex-start;
+        gap: 16px;
+    }
+    
+    /* Icon section */
+    .alert-icon-section {
+        position: relative;
+        flex-shrink: 0;
+    }
+    
+    .alert-icon-container {
+        width: 48px;
+        height: 48px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--alert-primary-color);
+        border-radius: 50%;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+        position: relative;
+        z-index: 3;
+    }
+    
+    .alert-icon {
+        width: 24px;
+        height: 24px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    
+    .alert-icon-symbol {
+        color: white;
+        font-size: 16px;
+        font-weight: 700;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+    }
+    
+    /* Animated rings around icon */
+    .alert-icon-rings {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+    }
+    
+    .alert-ring {
+        position: absolute;
+        border: 2px solid var(--alert-primary-color);
+        border-radius: 50%;
+        opacity: 0;
+        animation: ringPulse 2s ease-out infinite;
+    }
+    
+    .alert-ring-1 {
+        width: 60px;
+        height: 60px;
+        top: -30px;
+        left: -30px;
+        animation-delay: 0s;
+    }
+    
+    .alert-ring-2 {
+        width: 80px;
+        height: 80px;
+        top: -40px;
+        left: -40px;
+        animation-delay: 0.4s;
+    }
+    
+    .alert-ring-3 {
+        width: 100px;
+        height: 100px;
+        top: -50px;
+        left: -50px;
+        animation-delay: 0.8s;
+    }
+    
+    /* Text section */
+    .alert-text-section {
+        flex: 1;
+        min-width: 0;
+    }
+    
+    .alert-header {
+        margin-bottom: 6px;
+    }
+    
+    .alert-type-label {
+        font-size: 12px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.8px;
+        color: var(--alert-primary-color);
+        opacity: 0.8;
+    }
+    
+    .alert-message {
+        font-size: 16px;
+        font-weight: 600;
+        color: #1a1a1a;
+        line-height: 1.4;
+        margin-bottom: 4px;
+        text-shadow: 0 1px 2px rgba(255, 255, 255, 0.8);
+    }
+    
+    .alert-subtitle {
+        font-size: 13px;
+        font-weight: 500;
+        color: rgba(0, 0, 0, 0.7);
+        line-height: 1.3;
+        margin-top: 4px;
+    }
+    
+    /* Action buttons */
+    .alert-actions {
+        display: flex;
+        gap: 8px;
+        margin-top: 16px;
+        flex-wrap: wrap;
+    }
+    
+    .alert-action-btn {
+        padding: 6px 12px;
+        border: 1px solid var(--alert-primary-color);
+        background: rgba(255, 255, 255, 0.9);
+        color: var(--alert-primary-color);
+        border-radius: 8px;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        backdrop-filter: blur(10px);
+    }
+    
+    .alert-action-btn:hover {
+        background: var(--alert-primary-color);
+        color: white;
+        transform: translateY(-1px);
+        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+    }
+    
+    /* Progress bar for auto-dismiss */
+    .alert-progress-container {
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        height: 3px;
+        border-radius: 0 0 16px 16px;
+        overflow: hidden;
+    }
+    
+    .alert-progress-bar {
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.1);
+    }
+    
+    .alert-progress-fill {
+        height: 100%;
+        width: 0%;
+        background: var(--alert-primary-color);
+        transition: width 0.1s linear;
+    }
+    
+    /* Close button */
+    .alert-close-btn {
+        position: absolute;
+        top: 12px;
+        right: 12px;
+        width: 24px;
+        height: 24px;
+        border: none;
+        background: rgba(0, 0, 0, 0.1);
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        opacity: 0.6;
+    }
+    
+    .alert-close-btn:hover {
+        background: rgba(0, 0, 0, 0.2);
+        opacity: 1;
+        transform: scale(1.1);
+    }
+    
+    .alert-close-icon {
+        font-size: 14px;
+        font-weight: 700;
+        color: rgba(0, 0, 0, 0.7);
+        line-height: 1;
+    }
+    
+    /* Alert Type Variations */
+    
+    /* Info Alert */
+    .alert-card.info {
+        --alert-primary-color: #3b82f6;
+        --alert-secondary-color: #1d4ed8;
+    }
+    
+    .alert-card.info .alert-icon-symbol::before {
+        content: "ℹ";
+    }
+    
+    /* Success Alert */
+    .alert-card.success {
+        --alert-primary-color: #10b981;
+        --alert-secondary-color: #047857;
+    }
+    
+    .alert-card.success .alert-icon-symbol::before {
+        content: "✓";
+    }
+    
+    /* Warning Alert */
+    .alert-card.warning {
+        --alert-primary-color: #f59e0b;
+        --alert-secondary-color: #d97706;
+    }
+    
+    .alert-card.warning .alert-icon-symbol::before {
+        content: "⚠";
+    }
+    
+    /* Error Alert */
+    .alert-card.error {
+        --alert-primary-color: #ef4444;
+        --alert-secondary-color: #dc2626;
+    }
+    
+    .alert-card.error .alert-icon-symbol::before {
+        content: "✕";
+    }
+    
+    /* Celebration Alert */
+    .alert-card.celebration {
+        --alert-primary-color: #8b5cf6;
+        --alert-secondary-color: #7c3aed;
+    }
+    
+    .alert-card.celebration .alert-icon-symbol::before {
+        content: "🎉";
+    }
+    
+    /* Notification Alert */
+    .alert-card.notification {
+        --alert-primary-color: #6366f1;
+        --alert-secondary-color: #4f46e5;
+    }
+    
+    .alert-card.notification .alert-icon-symbol::before {
+        content: "🔔";
+    }
+    
+    /* Animations */
+    @keyframes gradientShift {
+        0%, 100% { opacity: 0.1; }
+        50% { opacity: 0.2; }
+    }
+    
+    @keyframes particleFloat {
+        0%, 100% {
+            transform: translateY(0px) rotate(0deg);
+            opacity: 0.6;
+        }
+        50% {
+            transform: translateY(-10px) rotate(180deg);
+            opacity: 1;
+        }
+    }
+    
+    @keyframes borderPulse {
+        0%, 100% { opacity: 0.3; }
+        50% { opacity: 0.6; }
+    }
+    
+    @keyframes ringPulse {
+        0% {
+            opacity: 0;
+            transform: scale(0.5);
+        }
+        50% {
+            opacity: 0.8;
+        }
+        100% {
+            opacity: 0;
+            transform: scale(1.5);
+        }
+    }
+    
+    /* Entrance Animations */
+    .alert-overlay.bounce-in {
+        animation: alertBounceIn 0.6s cubic-bezier(0.68, -0.55, 0.265, 1.55) forwards;
+    }
+    
+    .alert-overlay.slide-in-down {
+        animation: alertSlideInDown 0.5s ease-out forwards;
+    }
+    
+    .alert-overlay.zoom-in {
+        animation: alertZoomIn 0.4s ease-out forwards;
+    }
+    
+    .alert-overlay.shake-in {
+        animation: alertShakeIn 0.6s ease-out forwards;
+    }
+    
+    /* Exit Animations */
+    .alert-overlay.slide-out-up {
+        animation: alertSlideOutUp 0.4s ease-in forwards;
+    }
+    
+    .alert-overlay.zoom-out {
+        animation: alertZoomOut 0.3s ease-in forwards;
+    }
+    
+    .alert-overlay.fade-out {
+        animation: alertFadeOut 0.3s ease-in forwards;
+    }
+    
+    @keyframes alertBounceIn {
+        0% {
+            opacity: 0;
+            transform: translateY(-100px) scale(0.3);
+        }
+        50% {
+            transform: translateY(30px) scale(1.05);
+        }
+        70% {
+            transform: translateY(-10px) scale(0.98);
+        }
+        100% {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+        }
+    }
+    
+    @keyframes alertSlideInDown {
+        0% {
+            opacity: 0;
+            transform: translateY(-50px);
+        }
+        100% {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+    
+    @keyframes alertZoomIn {
+        0% {
+            opacity: 0;
+            transform: scale(0.3);
+        }
+        50% {
+            transform: scale(1.1);
+        }
+        100% {
+            opacity: 1;
+            transform: scale(1);
+        }
+    }
+    
+    @keyframes alertShakeIn {
+        0% {
+            opacity: 0;
+            transform: translateX(-10px);
+        }
+        25% {
+            transform: translateX(10px);
+        }
+        50% {
+            transform: translateX(-8px);
+        }
+        75% {
+            transform: translateX(6px);
+        }
+        100% {
+            opacity: 1;
+            transform: translateX(0);
+        }
+    }
+    
+    @keyframes alertSlideOutUp {
+        0% {
+            opacity: 1;
+            transform: translateY(0);
+        }
+        100% {
+            opacity: 0;
+            transform: translateY(-50px);
+        }
+    }
+    
+    @keyframes alertZoomOut {
+        0% {
+            opacity: 1;
+            transform: scale(1);
+        }
+        100% {
+            opacity: 0;
+            transform: scale(0.3);
+        }
+    }
+    
+    @keyframes alertFadeOut {
+        0% {
+            opacity: 1;
+        }
+        100% {
+            opacity: 0;
+        }
+    }
+    
+    /* Responsive adjustments */
+    @media (max-width: 1366px) {
+        .alert-overlay {
+            width: 350px;
+        }
+        
+        .alert-card {
+            padding: 20px;
+        }
+        
+        .alert-icon-container {
+            width: 40px;
+            height: 40px;
+        }
+        
+        .alert-icon {
+            width: 20px;
+            height: 20px;
+        }
+        
+        .alert-message {
+            font-size: 15px;
+        }
+    }
+    
+    /* Dark theme variant */
+    .alert-overlay.dark .alert-card {
+        background: rgba(20, 20, 20, 0.95);
+        border: 2px solid rgba(255, 255, 255, 0.1);
+    }
+    
+    .alert-overlay.dark .alert-message {
+        color: #ffffff;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+    }
+    
+    .alert-overlay.dark .alert-subtitle {
+        color: rgba(255, 255, 255, 0.8);
+    }
+    
+    .alert-overlay.dark .alert-action-btn {
+        background: rgba(255, 255, 255, 0.1);
+        color: white;
+    }
+    
+    .alert-overlay.dark .alert-close-icon {
+        color: rgba(255, 255, 255, 0.7);
+    }
+</style>
+
+<script>
+    // Alert overlay specific functionality
+    (function() {
+        const alertOverlay = document.getElementById('{{ overlay_id | default(overlay.id) }}');
+        if (!alertOverlay) return;
+        
+        let autoHideTimer = null;
+        let progressInterval = null;
+        
+        // Progress bar animation
+        function animateProgress(duration) {
+            const progressFill = alertOverlay.querySelector('.alert-progress-fill');
+            if (!progressFill) return;
+            
+            progressFill.style.width = '0%';
+            progressFill.style.transition = 'none';
+            
+            let progress = 0;
+            const increment = 100 / (duration * 10); // Update every 100ms
+            
+            progressInterval = setInterval(() => {
+                progress += increment;
+                if (progress >= 100) {
+                    progress = 100;
+                    clearInterval(progressInterval);
+                }
+                progressFill.style.width = progress + '%';
+            }, 100);
+        }
+        
+        // Show alert with specified type and duration
+        function showAlert(content, duration, animation = 'bounce-in') {
+            // Update content
+            if (content) {
+                window.StreamOpsOverlay.updateOverlayContent(alertOverlay, content);
+                
+                // Update alert type class
+                if (content.alert_type || content.template_variables?.alert_type) {
+                    const alertType = content.alert_type || content.template_variables.alert_type;
+                    const alertCard = alertOverlay.querySelector('.alert-card');
+                    
+                    // Remove existing type classes
+                    alertCard.classList.remove('info', 'success', 'warning', 'error', 'celebration', 'notification');
+                    alertCard.classList.add(alertType);
+                    
+                    // Update type label
+                    const typeLabel = alertOverlay.querySelector('.alert-type-label');
+                    if (typeLabel) {
+                        typeLabel.textContent = alertType.charAt(0).toUpperCase() + alertType.slice(1);
+                    }
+                }
+            }
+            
+            // Show overlay with animation
+            alertOverlay.classList.remove('hidden');
+            alertOverlay.classList.add('visible', animation);
+            
+            // Remove animation class after completion
+            setTimeout(() => {
+                alertOverlay.classList.remove(animation);
+            }, 600);
+            
+            // Start progress animation and auto-hide if duration provided
+            if (duration) {
+                animateProgress(duration);
+                
+                autoHideTimer = setTimeout(() => {
+                    hideAlert('slide-out-up');
+                }, duration * 1000);
+            }
+            
+            // Track impression
+            if (window.StreamOpsOverlay) {
+                window.StreamOpsOverlay.trackImpression('{{ overlay_id | default(overlay.id) }}');
+            }
+        }
+        
+        // Hide alert
+        function hideAlert(animation = 'fade-out') {
+            alertOverlay.classList.add(animation);
+            
+            setTimeout(() => {
+                alertOverlay.classList.remove('visible', animation);
+                alertOverlay.classList.add('hidden');
+                
+                // Reset progress bar
+                const progressFill = alertOverlay.querySelector('.alert-progress-fill');
+                if (progressFill) {
+                    progressFill.style.width = '0%';
+                }
+            }, 400);
+            
+            // Clear timers
+            if (autoHideTimer) {
+                clearTimeout(autoHideTimer);
+                autoHideTimer = null;
+            }
+            
+            if (progressInterval) {
+                clearInterval(progressInterval);
+                progressInterval = null;
+            }
+        }
+        
+        // Update alert content
+        function updateAlert(content, animated = true) {
+            if (animated) {
+                alertOverlay.style.opacity = '0.7';
+                setTimeout(() => {
+                    window.StreamOpsOverlay.updateOverlayContent(alertOverlay, content);
+                    alertOverlay.style.opacity = '1';
+                }, 150);
+            } else {
+                window.StreamOpsOverlay.updateOverlayContent(alertOverlay, content);
+            }
+        }
+        
+        // Shake alert for emphasis
+        function shakeAlert() {
+            alertOverlay.classList.add('shake-in');
+            setTimeout(() => {
+                alertOverlay.classList.remove('shake-in');
+            }, 600);
+        }
+        
+        // Handle close button click
+        const closeBtn = alertOverlay.querySelector('.alert-close-btn');
+        if (closeBtn) {
+            closeBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                hideAlert('zoom-out');
+                
+                // Track close event
+                if (window.StreamOpsOverlay) {
+                    window.StreamOpsOverlay.sendMessage({
+                        type: 'alert_dismissed',
+                        overlay_id: '{{ overlay_id | default(overlay.id) }}',
+                        method: 'close_button',
+                        timestamp: new Date().toISOString()
+                    });
+                }
+            });
+        }
+        
+        // Handle action button clicks
+        const actionButtons = alertOverlay.querySelectorAll('.alert-action-btn');
+        actionButtons.forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const action = btn.getAttribute('data-action');
+                
+                // Track action event
+                if (window.StreamOpsOverlay) {
+                    window.StreamOpsOverlay.sendMessage({
+                        type: 'alert_action',
+                        overlay_id: '{{ overlay_id | default(overlay.id) }}',
+                        action: action,
+                        timestamp: new Date().toISOString()
+                    });
+                }
+                
+                // Hide alert after action
+                hideAlert('zoom-out');
+                
+                console.log('Alert action clicked:', action);
+            });
+        });
+        
+        // Handle alert card click (for general interaction tracking)
+        const alertCard = alertOverlay.querySelector('.alert-card');
+        if (alertCard) {
+            alertCard.addEventListener('click', () => {
+                // Track interaction
+                if (window.StreamOpsOverlay) {
+                    window.StreamOpsOverlay.sendMessage({
+                        type: 'alert_interaction',
+                        overlay_id: '{{ overlay_id | default(overlay.id) }}',
+                        timestamp: new Date().toISOString()
+                    });
+                }
+            });
+        }
+        
+        // Expose alert control functions globally
+        const overlayId = '{{ overlay_id | default(overlay.id) }}';
+        const globalKey = 'alert_' + overlayId.replace(/[-\s]/g, '_');
+        
+        window[globalKey] = {
+            show: showAlert,
+            hide: hideAlert,
+            update: updateAlert,
+            shake: shakeAlert,
+            element: alertOverlay
+        };
+        
+        // Also add to main overlay control if available
+        if (window.overlay_{{ overlay_id | default(overlay.id) | replace('-', '_') }}) {
+            Object.assign(window.overlay_{{ overlay_id | default(overlay.id) | replace('-', '_') }}, {
+                showAlert: showAlert,
+                hideAlert: hideAlert,
+                updateAlert: updateAlert,
+                shakeAlert: shakeAlert
+            });
+        }
+        
+        console.log('Alert overlay initialized:', overlayId);
+    })();
+</script>

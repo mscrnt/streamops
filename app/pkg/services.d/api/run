@@ -1,0 +1,16 @@
+#!/command/with-contenv sh
+
+# Wait for NATS to be ready
+if [ "${NATS_ENABLE}" = "true" ]; then
+    echo "Waiting for NATS to be ready..."
+    sleep 5
+fi
+
+echo "Starting StreamOps API..."
+cd /opt/streamops
+
+exec python -m uvicorn app.api.main:app \
+    --host 0.0.0.0 \
+    --port 7767 \
+    --reload \
+    --log-level ${LOG_LEVEL:-info}

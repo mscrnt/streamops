@@ -205,3 +205,28 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# UI Build
+app/ui/dist/
+app/static/
+
+# Docker
+.dockerignore
+
+# Local data
+/data/
+*.db-shm
+*.db-wal
+
+# StreamOps specific
+/cache/
+/thumbs/
+/logs/*.json
+config.json.local

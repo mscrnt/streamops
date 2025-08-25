@@ -1,0 +1,16 @@
+#!/command/with-contenv sh
+# Start overlay server
+
+# Check role
+if [ "${ROLE}" = "worker" ]; then
+    echo "Overlay server disabled for role: ${ROLE}"
+    exec sleep infinity
+fi
+
+# Wait for API
+echo "Waiting for API to be ready..."
+sleep 8
+
+echo "Starting StreamOps Overlay Server..."
+cd /opt/streamops
+exec python -m app.overlay.server

@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=1920, height=1080">
+    <title>{{ page_title | default("StreamOps Overlay") }}</title>
+    
+    <!-- Disable text selection and highlighting for clean overlay appearance -->
+    <style>
+        * {
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+            user-select: none;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+        
+        body {
+            margin: 0;
+            padding: 0;
+            background: transparent;
+            overflow: hidden;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            width: 1920px;
+            height: 1080px;
+            position: relative;
+        }
+        
+        /* Base overlay container styles */
+        .overlay-container {
+            position: absolute;
+            transition: all 0.3s ease-in-out;
+            box-sizing: border-box;
+        }
+        
+        /* Common utility classes */
+        .hidden {
+            display: none !important;
+        }
+        
+        .invisible {
+            visibility: hidden !important;
+        }
+        
+        .transparent {
+            opacity: 0 !important;
+        }
+        
+        .fade-transition {
+            transition: opacity 0.5s ease-in-out;
+        }
+        
+        .scale-transition {
+            transition: transform 0.3s ease-in-out;
+        }
+        
+        /* Text utilities */
+        .text-center { text-align: center; }
+        .text-left { text-align: left; }
+        .text-right { text-align: right; }
+        .text-uppercase { text-transform: uppercase; }
+        .text-lowercase { text-transform: lowercase; }
+        .text-capitalize { text-transform: capitalize; }
+        
+        /* Common text shadows for overlay visibility */
+        .text-shadow-light {
+            text-shadow: 2px 2px 4px rgba(255, 255, 255, 0.8);
+        }
+        
+        .text-shadow-dark {
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8);
+        }
+        
+        .text-shadow-strong {
+            text-shadow: 
+                2px 2px 0px rgba(0, 0, 0, 1),
+                -2px -2px 0px rgba(0, 0, 0, 1),
+                2px -2px 0px rgba(0, 0, 0, 1),
+                -2px 2px 0px rgba(0, 0, 0, 1);
+        }
+        
+        /* Background utilities */
+        .bg-overlay-light {
+            background: rgba(255, 255, 255, 0.9);
+            backdrop-filter: blur(5px);
+        }
+        
+        .bg-overlay-dark {
+            background: rgba(0, 0, 0, 0.8);
+            backdrop-filter: blur(5px);
+        }
+        
+        .bg-overlay-primary {
+            background: linear-gradient(135deg, rgba(99, 102, 241, 0.9), rgba(139, 92, 246, 0.9));
+            backdrop-filter: blur(5px);
+        }
+        
+        .bg-overlay-success {
+            background: linear-gradient(135deg, rgba(34, 197, 94, 0.9), rgba(22, 163, 74, 0.9));
+            backdrop-filter: blur(5px);
+        }
+        
+        .bg-overlay-warning {
+            background: linear-gradient(135deg, rgba(251, 191, 36, 0.9), rgba(245, 158, 11, 0.9));
+            backdrop-filter: blur(5px);
+        }
+        
+        .bg-overlay-error {
+            background: linear-gradient(135deg, rgba(239, 68, 68, 0.9), rgba(220, 38, 38, 0.9));
+            backdrop-filter: blur(5px);
+        }
+        
+        /* Border radius utilities */
+        .rounded-none { border-radius: 0; }
+        .rounded-sm { border-radius: 0.25rem; }
+        .rounded { border-radius: 0.5rem; }
+        .rounded-md { border-radius: 0.75rem; }
+        .rounded-lg { border-radius: 1rem; }
+        .rounded-xl { border-radius: 1.5rem; }
+        .rounded-2xl { border-radius: 2rem; }
+        .rounded-full { border-radius: 9999px; }
+        
+        /* Padding utilities */
+        .p-0 { padding: 0; }
+        .p-2 { padding: 0.5rem; }
+        .p-4 { padding: 1rem; }
+        .p-6 { padding: 1.5rem; }
+        .p-8 { padding: 2rem; }
+        .px-2 { padding-left: 0.5rem; padding-right: 0.5rem; }
+        .px-4 { padding-left: 1rem; padding-right: 1rem; }
+        .px-6 { padding-left: 1.5rem; padding-right: 1.5rem; }
+        .py-2 { padding-top: 0.5rem; padding-bottom: 0.5rem; }
+        .py-4 { padding-top: 1rem; padding-bottom: 1rem; }
+        .py-6 { padding-top: 1.5rem; padding-bottom: 1.5rem; }
+        
+        /* Margin utilities */
+        .m-0 { margin: 0; }
+        .m-2 { margin: 0.5rem; }
+        .m-4 { margin: 1rem; }
+        .mx-auto { margin-left: auto; margin-right: auto; }
+        .mb-2 { margin-bottom: 0.5rem; }
+        .mb-4 { margin-bottom: 1rem; }
+        .mt-2 { margin-top: 0.5rem; }
+        .mt-4 { margin-top: 1rem; }
+        
+        /* Font size utilities */
+        .text-xs { font-size: 0.75rem; line-height: 1rem; }
+        .text-sm { font-size: 0.875rem; line-height: 1.25rem; }
+        .text-base { font-size: 1rem; line-height: 1.5rem; }
+        .text-lg { font-size: 1.125rem; line-height: 1.75rem; }
+        .text-xl { font-size: 1.25rem; line-height: 1.75rem; }
+        .text-2xl { font-size: 1.5rem; line-height: 2rem; }
+        .text-3xl { font-size: 1.875rem; line-height: 2.25rem; }
+        .text-4xl { font-size: 2.25rem; line-height: 2.5rem; }
+        .text-5xl { font-size: 3rem; line-height: 1; }
+        .text-6xl { font-size: 3.75rem; line-height: 1; }
+        
+        /* Font weight utilities */
+        .font-thin { font-weight: 100; }
+        .font-light { font-weight: 300; }
+        .font-normal { font-weight: 400; }
+        .font-medium { font-weight: 500; }
+        .font-semibold { font-weight: 600; }
+        .font-bold { font-weight: 700; }
+        .font-extrabold { font-weight: 800; }
+        .font-black { font-weight: 900; }
+        
+        /* Flexbox utilities */
+        .flex { display: flex; }
+        .flex-col { flex-direction: column; }
+        .flex-row { flex-direction: row; }
+        .items-center { align-items: center; }
+        .items-start { align-items: flex-start; }
+        .items-end { align-items: flex-end; }
+        .justify-center { justify-content: center; }
+        .justify-between { justify-content: space-between; }
+        .justify-start { justify-content: flex-start; }
+        .justify-end { justify-content: flex-end; }
+        
+        /* Debug grid (hidden by default, can be toggled with JavaScript) */
+        .debug-grid {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-image: 
+                linear-gradient(rgba(255, 0, 0, 0.1) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 0, 0, 0.1) 1px, transparent 1px);
+            background-size: 100px 100px;
+            pointer-events: none;
+            z-index: 9999;
+        }
+        
+        /* WebSocket connection status indicator */
+        .connection-status {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #ef4444;
+            z-index: 10000;
+            opacity: 0.7;
+            transition: background 0.3s ease;
+        }
+        
+        .connection-status.connected {
+            background: #10b981;
+        }
+        
+        .connection-status.connecting {
+            background: #f59e0b;
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 0.7; }
+            50% { opacity: 1; }
+        }
+    </style>
+    
+    <!-- Custom overlay CSS -->
+    <style id="overlay-css">
+        {{ overlay_css | safe }}
+    </style>
+    
+    <!-- Additional custom styles -->
+    {% block extra_css %}{% endblock %}
+</head>
+<body>
+    <!-- WebSocket connection status indicator -->
+    <div class="connection-status" id="connection-status" title="WebSocket Connection Status"></div>
+    
+    <!-- Debug grid for positioning -->
+    <div class="debug-grid" id="debug-grid"></div>
+    
+    <!-- Main overlay content -->
+    <div id="overlay-content">
+        {% if overlay_html %}
+            {{ overlay_html | safe }}
+        {% else %}
+            {% block content %}
+                <div class="overlay-container" style="left: 50%; top: 50%; transform: translate(-50%, -50%);">
+                    <div class="bg-overlay-dark text-white p-6 rounded-lg text-center">
+                        <h2 class="text-2xl font-bold mb-2">StreamOps Overlay</h2>
+                        <p class="text-base">Ready for content</p>
+                    </div>
+                </div>
+            {% endblock %}
+        {% endif %}
+    </div>
+    
+    <!-- Base JavaScript utilities -->
+    <script>
+        // Global overlay utilities
+        window.StreamOpsOverlay = {
+            // WebSocket connection
+            ws: null,
+            connected: false,
+            reconnectAttempts: 0,
+            maxReconnectAttempts: 10,
+            reconnectDelay: 1000,
+            
+            // Overlay management
+            overlays: new Map(),
+            debugMode: false,
+            
+            // Initialize overlay system
+            init: function(websocketUrl) {
+                this.connectWebSocket(websocketUrl);
+                this.setupKeyboardShortcuts();
+                this.updateConnectionStatus('connecting');
+                
+                console.log('StreamOps Overlay System initialized');
+            },
+            
+            // WebSocket connection management
+            connectWebSocket: function(url) {
+                try {
+                    this.ws = new WebSocket(url);
+                    
+                    this.ws.onopen = () => {
+                        console.log('WebSocket connected');
+                        this.connected = true;
+                        this.reconnectAttempts = 0;
+                        this.updateConnectionStatus('connected');
+                        
+                        // Send registration message if overlay ID is available
+                        if (window.overlayId) {
+                            this.sendMessage({
+                                type: 'register',
+                                overlay_id: window.overlayId
+                            });
+                        }
+                    };
+                    
+                    this.ws.onmessage = (event) => {
+                        try {
+                            const data = JSON.parse(event.data);
+                            this.handleMessage(data);
+                        } catch (e) {
+                            console.error('Failed to parse WebSocket message:', e);
+                        }
+                    };
+                    
+                    this.ws.onclose = () => {
+                        console.log('WebSocket disconnected');
+                        this.connected = false;
+                        this.updateConnectionStatus('disconnected');
+                        this.scheduleReconnect();
+                    };
+                    
+                    this.ws.onerror = (error) => {
+                        console.error('WebSocket error:', error);
+                        this.updateConnectionStatus('error');
+                    };
+                    
+                } catch (error) {
+                    console.error('Failed to connect WebSocket:', error);
+                    this.updateConnectionStatus('error');
+                    this.scheduleReconnect();
+                }
+            },
+            
+            // Schedule WebSocket reconnection
+            scheduleReconnect: function() {
+                if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+                    console.error('Max reconnection attempts reached');
+                    return;
+                }
+                
+                this.reconnectAttempts++;
+                const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
+                
+                console.log(`Scheduling reconnect attempt ${this.reconnectAttempts} in ${delay}ms`);
+                
+                setTimeout(() => {
+                    if (!this.connected) {
+                        this.updateConnectionStatus('connecting');
+                        this.connectWebSocket('{{ websocket_url }}');
+                    }
+                }, delay);
+            },
+            
+            // Send message via WebSocket
+            sendMessage: function(data) {
+                if (this.ws && this.connected) {
+                    this.ws.send(JSON.stringify(data));
+                } else {
+                    console.warn('WebSocket not connected, message queued');
+                    // Message queuing for offline messages
+                    const messageQueue = [];
+                    let isProcessing = false;
+                    
+                    function queueMessage(msg) {
+                        messageQueue.push(msg);
+                        if (!isProcessing) processQueue();
+                    }
+                    
+                    function processQueue() {
+                        if (messageQueue.length === 0) {
+                            isProcessing = false;
+                            return;
+                        }
+                        isProcessing = true;
+                        const msg = messageQueue.shift();
+                        handleMessage(msg);
+                        setTimeout(processQueue, 100);
+                    }
+                }
+            },
+            
+            // Handle incoming WebSocket messages
+            handleMessage: function(data) {
+                const type = data.type;
+                const overlayId = data.overlay_id;
+                
+                switch (type) {
+                    case 'show':
+                        this.showOverlay(overlayId, data.content, data.animation, data.duration);
+                        break;
+                    
+                    case 'hide':
+                        this.hideOverlay(overlayId, data.animation);
+                        break;
+                    
+                    case 'update':
+                        this.updateOverlay(overlayId, data.content, data.animation);
+                        break;
+                    
+                    case 'ping':
+                        this.sendMessage({ type: 'pong', overlay_id: overlayId });
+                        break;
+                    
+                    default:
+                        console.log('Unhandled message type:', type, data);
+                }
+            },
+            
+            // Show overlay with animation
+            showOverlay: function(overlayId, content, animation = 'fade-in', duration = null) {
+                const element = document.getElementById(overlayId);
+                if (!element) {
+                    console.warn('Overlay element not found:', overlayId);
+                    return;
+                }
+                
+                // Update content if provided
+                if (content) {
+                    this.updateOverlayContent(element, content);
+                }
+                
+                // Show with animation
+                element.style.display = 'block';
+                element.classList.remove('hidden', 'invisible', 'transparent');
+                
+                // Apply animation
+                if (animation && animation !== 'none') {
+                    element.classList.add(animation);
+                    
+                    // Remove animation class after completion
+                    setTimeout(() => {
+                        element.classList.remove(animation);
+                    }, 1000);
+                }
+                
+                // Schedule hide if duration specified
+                if (duration) {
+                    setTimeout(() => {
+                        this.hideOverlay(overlayId);
+                    }, duration * 1000);
+                }
+                
+                // Track impression
+                this.trackImpression(overlayId);
+                
+                console.log('Showed overlay:', overlayId, animation, duration);
+            },
+            
+            // Hide overlay with animation
+            hideOverlay: function(overlayId, animation = 'fade-out') {
+                const element = document.getElementById(overlayId);
+                if (!element) {
+                    console.warn('Overlay element not found:', overlayId);
+                    return;
+                }
+                
+                if (animation && animation !== 'none') {
+                    element.classList.add(animation);
+                    
+                    setTimeout(() => {
+                        element.style.display = 'none';
+                        element.classList.remove(animation);
+                        element.classList.add('hidden');
+                    }, 500);
+                } else {
+                    element.style.display = 'none';
+                    element.classList.add('hidden');
+                }
+                
+                console.log('Hid overlay:', overlayId, animation);
+            },
+            
+            // Update overlay content without hiding/showing
+            updateOverlay: function(overlayId, content, animation = null) {
+                const element = document.getElementById(overlayId);
+                if (!element) {
+                    console.warn('Overlay element not found:', overlayId);
+                    return;
+                }
+                
+                this.updateOverlayContent(element, content);
+                
+                // Apply update animation
+                if (animation) {
+                    element.classList.add(animation);
+                    setTimeout(() => {
+                        element.classList.remove(animation);
+                    }, 500);
+                }
+                
+                console.log('Updated overlay:', overlayId);
+            },
+            
+            // Update overlay content elements
+            updateOverlayContent: function(element, content) {
+                // Update text content
+                if (content.text) {
+                    const textElements = element.querySelectorAll('.overlay-text, [data-content="text"]');
+                    textElements.forEach(el => el.textContent = content.text);
+                }
+                
+                // Update image sources
+                if (content.image_url) {
+                    const imgElements = element.querySelectorAll('.overlay-image, [data-content="image"]');
+                    imgElements.forEach(el => el.src = content.image_url);
+                }
+                
+                // Update HTML content
+                if (content.html) {
+                    const htmlElements = element.querySelectorAll('.overlay-content, [data-content="html"]');
+                    htmlElements.forEach(el => el.innerHTML = content.html);
+                }
+                
+                // Update template variables
+                if (content.template_variables) {
+                    for (const [key, value] of Object.entries(content.template_variables)) {
+                        const elements = element.querySelectorAll(`[data-variable="${key}"]`);
+                        elements.forEach(el => {
+                            if (el.tagName === 'IMG') {
+                                el.src = value;
+                            } else if (el.tagName === 'INPUT') {
+                                el.value = value;
+                            } else {
+                                el.textContent = value;
+                            }
+                        });
+                    }
+                }
+            },
+            
+            // Track overlay impression
+            trackImpression: function(overlayId) {
+                this.sendMessage({
+                    type: 'impression',
+                    overlay_id: overlayId,
+                    timestamp: new Date().toISOString()
+                });
+            },
+            
+            // Update connection status indicator
+            updateConnectionStatus: function(status) {
+                const indicator = document.getElementById('connection-status');
+                if (indicator) {
+                    indicator.className = `connection-status ${status}`;
+                    indicator.title = `WebSocket: ${status}`;
+                }
+            },
+            
+            // Setup keyboard shortcuts for debugging
+            setupKeyboardShortcuts: function() {
+                document.addEventListener('keydown', (e) => {
+                    // Only work when Ctrl+Alt are pressed (to avoid conflicts)
+                    if (!e.ctrlKey || !e.altKey) return;
+                    
+                    switch (e.key.toLowerCase()) {
+                        case 'd':
+                            e.preventDefault();
+                            this.toggleDebugMode();
+                            break;
+                        
+                        case 'g':
+                            e.preventDefault();
+                            this.toggleDebugGrid();
+                            break;
+                        
+                        case 'r':
+                            e.preventDefault();
+                            location.reload();
+                            break;
+                    }
+                });
+            },
+            
+            // Toggle debug mode
+            toggleDebugMode: function() {
+                this.debugMode = !this.debugMode;
+                console.log('Debug mode:', this.debugMode ? 'ON' : 'OFF');
+                
+                if (this.debugMode) {
+                    // Add debug styling
+                    document.body.style.border = '2px solid red';
+                    
+                    // Log overlay information
+                    console.log('Overlays on page:', Array.from(document.querySelectorAll('[id]')).map(el => el.id));
+                } else {
+                    document.body.style.border = 'none';
+                }
+            },
+            
+            // Toggle debug grid
+            toggleDebugGrid: function() {
+                const grid = document.getElementById('debug-grid');
+                if (grid) {
+                    grid.style.display = grid.style.display === 'none' ? 'block' : 'none';
+                }
+            }
+        };
+        
+        // Initialize overlay system when page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            const websocketUrl = '{{ websocket_url | default("ws://localhost:7769/overlay/ws") }}';
+            window.StreamOpsOverlay.init(websocketUrl);
+        });
+        
+        // Expose overlay ID globally if available
+        {% if overlay_id %}
+        window.overlayId = '{{ overlay_id }}';
+        {% endif %}
+    </script>
+    
+    <!-- Custom overlay JavaScript -->
+    <script id="overlay-js">
+        {{ overlay_js | safe }}
+    </script>
+    
+    <!-- Additional custom scripts -->
+    {% block extra_js %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,245 @@
+import os
+import logging
+from pathlib import Path
+import aiosqlite
+from typing import Optional
+import json
+
+logger = logging.getLogger(__name__)
+
+# Global database connection
+_db: Optional[aiosqlite.Connection] = None
+
+async def get_db() -> aiosqlite.Connection:
+    """Get database connection"""
+    global _db
+    if _db is None:
+        await init_db()
+    return _db
+
+async def init_db() -> None:
+    """Initialize database with schema"""
+    global _db
+    
+    db_path = Path(os.getenv("DB_PATH", "/data/db/streamops.db"))
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    try:
+        _db = await aiosqlite.connect(
+            str(db_path),
+            timeout=30.0,
+        )
+        
+        # Enable foreign keys and JSON1
+        await _db.execute("PRAGMA foreign_keys = ON")
+        await _db.execute("PRAGMA journal_mode = WAL")
+        
+        # Create tables
+        await create_tables()
+        
+        logger.info(f"Database initialized at {db_path}")
+        
+    except Exception as e:
+        logger.error(f"Failed to initialize database: {e}")
+        raise
+
+async def close_db() -> None:
+    """Close database connection"""
+    global _db
+    if _db:
+        await _db.close()
+        _db = None
+        logger.info("Database connection closed")
+
+async def create_tables() -> None:
+    """Create all database tables"""
+    
+    # Assets table
+    await _db.execute("""
+        CREATE TABLE IF NOT EXISTS so_assets (
+            id TEXT PRIMARY KEY,
+            abs_path TEXT UNIQUE NOT NULL,
+            drive_hint TEXT,
+            size INTEGER,
+            mtime REAL,
+            ctime REAL,
+            hash_xxh64 TEXT,
+            hash_sha256 TEXT,
+            duration_sec REAL,
+            video_codec TEXT,
+            audio_codec TEXT,
+            width INTEGER,
+            height INTEGER,
+            fps REAL,
+            container TEXT,
+            streams_json TEXT,
+            tags_json TEXT,
+            status TEXT DEFAULT 'indexed',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    # Sessions table (OBS recording sessions)
+    await _db.execute("""
+        CREATE TABLE IF NOT EXISTS so_sessions (
+            id TEXT PRIMARY KEY,
+            start_ts TIMESTAMP NOT NULL,
+            end_ts TIMESTAMP,
+            scene_at_start TEXT,
+            obs_profile TEXT,
+            obs_collection TEXT,
+            markers_json TEXT,
+            metrics_json TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    # Jobs table
+    await _db.execute("""
+        CREATE TABLE IF NOT EXISTS so_jobs (
+            id TEXT PRIMARY KEY,
+            type TEXT NOT NULL,
+            asset_id TEXT,
+            payload_json TEXT NOT NULL,
+            state TEXT DEFAULT 'queued',
+            progress REAL DEFAULT 0,
+            error TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (asset_id) REFERENCES so_assets(id)
+        )
+    """)
+    
+    # Rules table
+    await _db.execute("""
+        CREATE TABLE IF NOT EXISTS so_rules (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            enabled BOOLEAN DEFAULT 1,
+            priority INTEGER DEFAULT 50,
+            when_json TEXT NOT NULL,
+            do_json TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    # Thumbnails table
+    await _db.execute("""
+        CREATE TABLE IF NOT EXISTS so_thumbs (
+            asset_id TEXT PRIMARY KEY,
+            poster_path TEXT,
+            sprite_path TEXT,
+            hover_mp4_path TEXT,
+            waveform_json TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (asset_id) REFERENCES so_assets(id)
+        )
+    """)
+    
+    # Overlays table
+    await _db.execute("""
+        CREATE TABLE IF NOT EXISTS so_overlays (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            manifest_json TEXT NOT NULL,
+            schedule_json TEXT,
+            stats_json TEXT,
+            enabled BOOLEAN DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    # Config table (key-value store)
+    await _db.execute("""
+        CREATE TABLE IF NOT EXISTS so_configs (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    # Reports table
+    await _db.execute("""
+        CREATE TABLE IF NOT EXISTS so_reports (
+            id TEXT PRIMARY KEY,
+            week_start DATE NOT NULL,
+            week_end DATE NOT NULL,
+            hours_recorded REAL,
+            disk_usage_delta INTEGER,
+            top_games_json TEXT,
+            backlog_count INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    # Drives table for watch folders
+    await _db.execute("""
+        CREATE TABLE IF NOT EXISTS so_drives (
+            id TEXT PRIMARY KEY,
+            path TEXT NOT NULL UNIQUE,
+            label TEXT,
+            type TEXT DEFAULT 'local',
+            config_json TEXT,
+            stats_json TEXT,
+            tags_json TEXT,
+            enabled BOOLEAN DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    # Create indexes
+    await _db.execute("CREATE INDEX IF NOT EXISTS idx_assets_path ON so_assets(abs_path)")
+    await _db.execute("CREATE INDEX IF NOT EXISTS idx_assets_status ON so_assets(status)")
+    await _db.execute("CREATE INDEX IF NOT EXISTS idx_assets_created ON so_assets(created_at)")
+    await _db.execute("CREATE INDEX IF NOT EXISTS idx_jobs_state ON so_jobs(state)")
+    await _db.execute("CREATE INDEX IF NOT EXISTS idx_jobs_type ON so_jobs(type)")
+    await _db.execute("CREATE INDEX IF NOT EXISTS idx_jobs_asset ON so_jobs(asset_id)")
+    await _db.execute("CREATE INDEX IF NOT EXISTS idx_rules_enabled ON so_rules(enabled)")
+    await _db.execute("CREATE INDEX IF NOT EXISTS idx_rules_priority ON so_rules(priority)")
+    
+    # Create FTS5 virtual table for full-text search
+    await _db.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS so_assets_fts USING fts5(
+            id UNINDEXED,
+            abs_path,
+            tags,
+            content=so_assets,
+            tokenize='porter'
+        )
+    """)
+    
+    # Create triggers to keep FTS in sync
+    await _db.execute("""
+        CREATE TRIGGER IF NOT EXISTS so_assets_fts_insert
+        AFTER INSERT ON so_assets
+        BEGIN
+            INSERT INTO so_assets_fts(id, abs_path, tags)
+            VALUES (new.id, new.abs_path, json_extract(new.tags_json, '$'));
+        END
+    """)
+    
+    await _db.execute("""
+        CREATE TRIGGER IF NOT EXISTS so_assets_fts_update
+        AFTER UPDATE ON so_assets
+        BEGIN
+            UPDATE so_assets_fts
+            SET abs_path = new.abs_path,
+                tags = json_extract(new.tags_json, '$')
+            WHERE id = new.id;
+        END
+    """)
+    
+    await _db.execute("""
+        CREATE TRIGGER IF NOT EXISTS so_assets_fts_delete
+        AFTER DELETE ON so_assets
+        BEGIN
+            DELETE FROM so_assets_fts WHERE id = old.id;
+        END
+    """)
+    
+    await _db.commit()
+    logger.info("Database schema created successfully")

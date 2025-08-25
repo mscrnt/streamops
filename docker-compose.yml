@@ -1,0 +1,63 @@
+services:
+  streamops:
+    image: streamops:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: streamops
+    ports:
+      - "7767:7767"  # UI/API
+      - "7768:7768"  # NATS Queue
+      - "7769:7769"  # Overlay WebSocket
+    volumes:
+      # Persistent data volume
+      - streamops-data:/data
+      
+      # Hot reload for development (remove in production)
+      # Mount only Python source directories to preserve built UI
+      - ./app/api:/opt/streamops/app/api:ro
+      - ./app/worker:/opt/streamops/app/worker:ro
+      - ./app/overlay:/opt/streamops/app/overlay:ro
+      
+      # Map your drives here
+      # StreamOps recordings folder
+      - /mnt/d/streamops:/mnt/recordings
+      
+      # Full D: drive access (for browsing)
+      - /mnt/d:/mnt/drive_d
+      
+    environment:
+      - ROLE=all
+      - NATS_ENABLE=true
+      - LOG_LEVEL=debug
+      
+      # OBS WebSocket
+      - OBS_WS_URL=ws://host.docker.internal:4455
+      - OBS_WS_PASSWORD=RealHardPassword1$$
+      
+      # Performance settings
+      - GPU_GUARD_PCT=40
+      - CPU_GUARD_PCT=70
+      - PAUSE_WHEN_RECORDING=true
+      
+    # GPU support (uncomment if you have NVIDIA GPU)
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    
+    restart: unless-stopped
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7767/health/live"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  streamops-data:
+    driver: local

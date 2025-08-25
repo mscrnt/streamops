@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=1920, height=1080">
+    <title>{{ page_title | default("StreamOps Multi-Overlay") }}</title>
+    
+    <!-- Base styles -->
+    <link rel="stylesheet" href="/overlay/static/overlay.css">
+    
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: transparent;
+            overflow: hidden;
+            font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+            width: 1920px;
+            height: 1080px;
+            position: relative;
+        }
+        
+        .multi-overlay-container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+        }
+        
+        /* Combined CSS for all overlays */
+        {{ combined_css | safe }}
+    </style>
+</head>
+<body>
+    <!-- WebSocket connection status indicator -->
+    <div class="connection-status" id="connection-status" title="WebSocket Connection Status"></div>
+    
+    <!-- Multi-overlay container -->
+    <div class="multi-overlay-container" id="multi-overlay-container">
+        {% for overlay_data in overlays %}
+            {% if overlay_data.visible %}
+                <div class="overlay-wrapper" data-overlay-id="{{ overlay_data.overlay.id }}">
+                    {{ overlay_data.html | safe }}
+                </div>
+            {% else %}
+                <div class="overlay-wrapper overlay-hidden" data-overlay-id="{{ overlay_data.overlay.id }}">
+                    {{ overlay_data.html | safe }}
+                </div>
+            {% endif %}
+        {% endfor %}
+    </div>
+    
+    <!-- Base JavaScript -->
+    <script src="/overlay/static/overlay.js"></script>
+    
+    <!-- Combined JavaScript for all overlays -->
+    <script>
+        // Initialize multi-overlay system
+        document.addEventListener('DOMContentLoaded', function() {
+            window.StreamOpsOverlay.init({
+                websocketUrl: '{{ websocket_url }}',
+                debugMode: {{ 'true' if scene else 'false' }},
+                scene: '{{ scene | default("") }}'
+            });
+        });
+        
+        // Combined overlay scripts
+        {{ combined_js | safe }}
+    </script>
+</body>
+</html>

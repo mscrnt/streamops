@@ -1,0 +1,77 @@
+services:
+  streamops:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: streamops-dev
+    ports:
+      - "7767:7767"  # UI/API
+      - "7768:7768"  # NATS (optional external)
+      - "7769:7769"  # Overlay WebSocket
+    volumes:
+      # Application code for hot reload
+      - ./app:/opt/streamops/app:ro
+      - ./requirements.txt:/opt/streamops/requirements.txt:ro
+      
+      # Persistent data
+      - streamops-data:/data
+      
+      # Map host drives (Windows example - adjust as needed)
+      # - A:/:/mnt/drive_a:ro
+      # - D:/:/mnt/drive_d:ro
+      # - E:/:/mnt/drive_e:ro
+      # - F:/:/mnt/drive_f:ro
+      
+      # For WSL2 development
+      - /mnt/d:/mnt/drive_d:ro
+      
+    environment:
+      - ROLE=all
+      - NATS_ENABLE=true
+      - LOG_LEVEL=debug
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
+      
+      # OBS WebSocket (optional)
+      # - OBS_WS_URL=ws://host.docker.internal:4455
+      # - OBS_WS_PASSWORD=your_password
+      
+      # Performance guardrails
+      - GPU_GUARD_PCT=40
+      - CPU_GUARD_PCT=70
+      - PAUSE_WHEN_RECORDING=true
+      
+    # GPU support (optional - comment out if no GPU)
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    
+    restart: unless-stopped
+    networks:
+      - streamops-net
+    
+    # Override entrypoint for development
+    # command: ["uvicorn", "app.api.main:app", "--host", "0.0.0.0", "--port", "7767", "--reload"]
+
+  # Optional: Standalone NATS for testing
+  # nats:
+  #   image: nats:2.10-alpine
+  #   container_name: streamops-nats
+  #   ports:
+  #     - "4222:4222"
+  #     - "8222:8222"
+  #   command: ["-js", "-m", "8222"]
+  #   networks:
+  #     - streamops-net
+
+volumes:
+  streamops-data:
+    driver: local
+
+networks:
+  streamops-net:
+    driver: bridge

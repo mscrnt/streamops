@@ -1,0 +1,17 @@
+#!/command/with-contenv sh
+# Initialize StreamOps on container start
+
+echo "Initializing StreamOps..."
+
+# Create necessary directories
+mkdir -p /data/db /data/logs /data/cache /data/thumbs /data/config /data/nats
+
+# Set permissions
+chmod -R 755 /data
+
+# Create default config if not exists
+if [ ! -f /data/config/config.json ]; then
+    echo '{"instance_name": "StreamOps", "initialized": true}' > /data/config/config.json
+fi
+
+echo "StreamOps initialization complete"

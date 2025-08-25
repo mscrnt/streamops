@@ -1,0 +1,48 @@
+# Core FastAPI and async
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+pydantic-settings==2.7.0
+
+# Database
+aiosqlite==0.20.0
+alembic==1.14.0
+
+# Queue and messaging
+nats-py==2.10.0
+asyncio-nats-streaming==0.4.0
+
+# File watching and system
+watchdog==6.0.0
+psutil==6.1.1
+xxhash==3.5.0
+
+# Media processing
+scenedetect==0.6.5
+numpy==1.26.4
+Pillow==11.1.0
+av==12.3.0
+
+# OBS WebSocket
+obsws-python==1.7.0
+websockets==14.1
+
+# Utilities
+pyyaml==6.0.2
+python-multipart==0.0.20
+aiofiles==24.1.0
+httpx==0.28.1
+jinja2==3.1.5
+python-dateutil==2.9.0
+pytz==2024.2
+orjson==3.10.14
+tenacity==9.0.0
+
+# Report generation
+reportlab==4.2.5
+
+# Testing
+pytest==8.3.5
+pytest-asyncio==0.25.2
+pytest-cov==6.0.0
+httpx==0.28.1

@@ -1,0 +1,205 @@
+<!-- Text Overlay Template -->
+<div id="{{ overlay_id | default(overlay.id) }}" class="text-overlay overlay-container hidden" 
+     style="left: {{ overlay.position.x }}px; top: {{ overlay.position.y }}px; z-index: {{ overlay.position.z_index }};">
+    
+    <div class="text-overlay-card">
+        <!-- Background effects -->
+        <div class="text-overlay-bg"></div>
+        
+        <!-- Text content -->
+        <div class="text-overlay-content">
+            <div class="text-overlay-main" data-content="text">
+                {{ content.text | default('Sample Text') }}
+            </div>
+            
+            {% if content.template_variables.subtitle %}
+            <div class="text-overlay-subtitle" data-variable="subtitle">
+                {{ content.template_variables.subtitle }}
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<style>
+    /* Text Overlay Styles */
+    .text-overlay {
+        font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+        opacity: 0;
+        transform: translateY(20px);
+        transition: all 0.3s ease-out;
+    }
+    
+    .text-overlay.visible {
+        opacity: 1;
+        transform: translateY(0);
+    }
+    
+    .text-overlay-card {
+        position: relative;
+        background: {{ overlay.style.background_color | default('rgba(0, 0, 0, 0.8)') }};
+        color: {{ overlay.style.text_color | default('#ffffff') }};
+        font-family: {{ overlay.style.font_family | default('inherit') }};
+        font-size: {{ overlay.style.font_size | default('24px') }};
+        padding: {{ overlay.style.padding | default('20px') }};
+        border-radius: {{ overlay.style.border_radius | default('10px') }};
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        {% if overlay.position.width %}width: {{ overlay.position.width }}px;{% endif %}
+        {% if overlay.position.height %}height: {{ overlay.position.height }}px;{% endif %}
+    }
+    
+    .text-overlay-bg {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: linear-gradient(135deg, 
+            rgba(99, 102, 241, 0.1) 0%,
+            rgba(139, 92, 246, 0.1) 100%);
+        border-radius: inherit;
+        pointer-events: none;
+    }
+    
+    .text-overlay-content {
+        position: relative;
+        z-index: 2;
+        text-align: center;
+    }
+    
+    .text-overlay-main {
+        font-weight: 600;
+        line-height: 1.2;
+        text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+        margin-bottom: 0;
+    }
+    
+    .text-overlay-subtitle {
+        font-size: 0.8em;
+        opacity: 0.8;
+        margin-top: 8px;
+        font-weight: 400;
+    }
+    
+    /* Animation classes */
+    .text-overlay.animate-fade-in {
+        animation: textFadeIn 0.5s ease-out forwards;
+    }
+    
+    .text-overlay.animate-fade-out {
+        animation: textFadeOut 0.5s ease-in forwards;
+    }
+    
+    .text-overlay.animate-slide-in-up {
+        animation: textSlideInUp 0.5s ease-out forwards;
+    }
+    
+    .text-overlay.animate-slide-out-down {
+        animation: textSlideOutDown 0.5s ease-in forwards;
+    }
+    
+    @keyframes textFadeIn {
+        from {
+            opacity: 0;
+            transform: scale(0.95);
+        }
+        to {
+            opacity: 1;
+            transform: scale(1);
+        }
+    }
+    
+    @keyframes textFadeOut {
+        from {
+            opacity: 1;
+            transform: scale(1);
+        }
+        to {
+            opacity: 0;
+            transform: scale(0.95);
+        }
+    }
+    
+    @keyframes textSlideInUp {
+        from {
+            opacity: 0;
+            transform: translateY(30px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+    
+    @keyframes textSlideOutDown {
+        from {
+            opacity: 1;
+            transform: translateY(0);
+        }
+        to {
+            opacity: 0;
+            transform: translateY(30px);
+        }
+    }
+</style>
+
+<script>
+    // Text overlay functionality
+    (function() {
+        const textOverlay = document.getElementById('{{ overlay_id | default(overlay.id) }}');
+        if (!textOverlay) return;
+        
+        // Expose control functions
+        const overlayId = '{{ overlay_id | default(overlay.id) }}';
+        const globalKey = 'text_' + overlayId.replace(/[-\s]/g, '_');
+        
+        window[globalKey] = {
+            show: function(content, animation = 'animate-fade-in') {
+                if (content && content.text) {
+                    const textElement = textOverlay.querySelector('.text-overlay-main');
+                    if (textElement) textElement.textContent = content.text;
+                }
+                
+                if (content && content.template_variables && content.template_variables.subtitle) {
+                    const subtitleElement = textOverlay.querySelector('.text-overlay-subtitle');
+                    if (subtitleElement) subtitleElement.textContent = content.template_variables.subtitle;
+                }
+                
+                textOverlay.classList.remove('hidden');
+                textOverlay.classList.add('visible', animation);
+                
+                setTimeout(() => {
+                    textOverlay.classList.remove(animation);
+                }, 500);
+            },
+            
+            hide: function(animation = 'animate-fade-out') {
+                textOverlay.classList.add(animation);
+                
+                setTimeout(() => {
+                    textOverlay.classList.remove('visible', animation);
+                    textOverlay.classList.add('hidden');
+                }, 500);
+            },
+            
+            update: function(content) {
+                if (content && content.text) {
+                    const textElement = textOverlay.querySelector('.text-overlay-main');
+                    if (textElement) textElement.textContent = content.text;
+                }
+                
+                if (content && content.template_variables && content.template_variables.subtitle) {
+                    const subtitleElement = textOverlay.querySelector('.text-overlay-subtitle');
+                    if (subtitleElement) subtitleElement.textContent = content.template_variables.subtitle;
+                }
+            },
+            
+            element: textOverlay
+        };
+        
+        console.log('Text overlay initialized:', overlayId);
+    })();
+</script>
