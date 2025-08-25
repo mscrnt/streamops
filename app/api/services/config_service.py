@@ -59,6 +59,7 @@ class ConfigService:
     def __init__(self):
         self.config_path = Path(os.getenv("CONFIG_PATH", "/data/config/config.json"))
         self.config: StreamOpsConfig = StreamOpsConfig()
+        self._custom_config: Dict[str, Any] = {}  # Store custom configuration keys
         self._lock = None
         
     async def load_config(self) -> StreamOpsConfig:
@@ -71,7 +72,11 @@ class ConfigService:
                 try:
                     with open(self.config_path, 'r') as f:
                         data = json.load(f)
-                        self.config = StreamOpsConfig(**data)
+                        # Extract custom config if present
+                        if 'custom' in data:
+                            self._custom_config = data.pop('custom')
+                        # Load standard config
+                        self.config = StreamOpsConfig(**{k: v for k, v in data.items() if k != 'custom'})
                     logger.info(f"Loaded config from {self.config_path}")
                 except Exception as e:
                     logger.error(f"Failed to load config: {e}")
@@ -148,3 +153,30 @@ class ConfigService:
     def get_all(self) -> Dict[str, Any]:
         """Get all configuration as dictionary"""
         return self.config.model_dump()
+    
+    async def set_config(self, key: str, value: Any) -> None:
+        """Set a custom configuration value"""
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        async with self._lock:
+            self._custom_config[key] = value
+            # Save both standard and custom config
+            await self._save_all_config()
+    
+    async def get_config(self, key: str, default: Any = None) -> Any:
+        """Get a custom configuration value"""
+        return self._custom_config.get(key, default)
+    
+    async def _save_all_config(self) -> None:
+        """Save both standard and custom configuration"""
+        try:
+            self.config_path.parent.mkdir(parents=True, exist_ok=True)
+            all_config = {
+                **self.config.model_dump(),
+                "custom": self._custom_config
+            }
+            with open(self.config_path, 'w') as f:
+                json.dump(all_config, f, indent=2, default=str)
+            logger.info(f"Saved all config to {self.config_path}")
+        except Exception as e:
+            logger.error(f"Failed to save config: {e}")

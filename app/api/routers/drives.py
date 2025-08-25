@@ -15,6 +15,8 @@ from app.api.schemas.drives import (
     DriveStatus, WatcherStatus, DriveType
 )
 from app.api.db.database import get_db
+import aiofiles
+import psutil
 
 router = APIRouter()
 
@@ -469,6 +471,36 @@ async def restart_watcher(
         return {"message": f"Watcher for drive {drive_id} restarted"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to restart watcher: {str(e)}")
+
+
+@router.post("/watchers/restart")
+async def restart_all_watchers(
+    background_tasks: BackgroundTasks,
+    db=Depends(get_db)
+) -> Dict[str, Any]:
+    """Restart all drive watchers - useful after configuration changes"""
+    try:
+        # Get all enabled drives
+        cursor = await db.execute(
+            "SELECT id, path FROM so_drives WHERE enabled = 1"
+        )
+        rows = await cursor.fetchall()
+        
+        restarted = []
+        for row in rows:
+            drive_id, drive_path = row
+            background_tasks.add_task(_stop_watcher, drive_id)
+            background_tasks.add_task(_start_watcher, drive_id, drive_path)
+            restarted.append(drive_id)
+        
+        return {
+            "message": "All watchers scheduled for restart",
+            "drives": restarted,
+            "count": len(restarted)
+        }
+    except Exception as e:
+        logger.error(f"Failed to restart all watchers: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to restart watchers: {str(e)}")
 
 
 @router.get("/{drive_id}/activity", response_model=DriveActivityResponse)

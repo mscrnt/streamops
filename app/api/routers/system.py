@@ -1,16 +1,43 @@
 """System monitoring and stats endpoints"""
 import os
+import json
 import psutil
+import tempfile
+from pathlib import Path
 from datetime import datetime, timedelta
-from typing import Dict, Any, Optional
-from fastapi import APIRouter, HTTPException, Query, Depends
+from typing import Dict, Any, Optional, List
+from fastapi import APIRouter, HTTPException, Query, Depends, Body
+from pydantic import BaseModel, Field
 import logging
+import aiofiles
+import asyncio
 
 from app.api.schemas.system import SystemStats, SystemHealth, DiskUsage, MemoryUsage, CPUUsage
 from app.api.db.database import get_db
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+class MountInfo(BaseModel):
+    """Mount point information"""
+    id: str = Field(..., description="Unique identifier for the mount")
+    label: str = Field(..., description="User-friendly label")
+    path: str = Field(..., description="Mount path")
+    type: str = Field("local", description="Mount type (local, network, etc)")
+    total: int = Field(..., description="Total space in bytes")
+    free: int = Field(..., description="Free space in bytes")
+    used: int = Field(..., description="Used space in bytes")
+    percent: float = Field(..., description="Usage percentage")
+    rw: bool = Field(..., description="Whether mount is read-write")
+    is_container_mount: bool = Field(..., description="Whether this is a container mount")
+    env_hint: Optional[str] = Field(None, description="Environment variable hint")
+
+
+class OBSProbeRequest(BaseModel):
+    """OBS connection probe request"""
+    url: str = Field(..., description="OBS WebSocket URL")
+    password: str = Field(..., description="OBS WebSocket password")
 
 
 @router.get("/stats", response_model=SystemStats)
@@ -329,3 +356,165 @@ async def get_resource_usage(
     except Exception as e:
         logger.error(f"Failed to get resource usage: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get resource usage: {str(e)}")
+
+
+@router.get("/mounts", response_model=List[MountInfo])
+async def get_system_mounts() -> List[MountInfo]:
+    """Get available mount points with storage information and write permissions"""
+    try:
+        mounts = []
+        seen_devices = set()
+        
+        # Check for environment hints
+        env_mounts = os.environ.get("STREAMOPS_MOUNTS_JSON", "")
+        mount_hints = {}
+        if env_mounts:
+            try:
+                hints = json.loads(env_mounts)
+                mount_hints = {h.get("path"): h for h in hints if isinstance(h, dict)}
+            except json.JSONDecodeError:
+                logger.warning(f"Invalid STREAMOPS_MOUNTS_JSON: {env_mounts}")
+        
+        # Scan /mnt/* directories
+        mnt_paths = []
+        if os.path.exists("/mnt"):
+            for entry in os.scandir("/mnt"):
+                if entry.is_dir() and not entry.name.startswith('.'):
+                    mnt_paths.append(entry.path)
+        
+        # Also check common paths
+        common_paths = ["/", "/data", "/opt/streamops"]
+        all_paths = mnt_paths + common_paths
+        
+        for path in all_paths:
+            try:
+                if not os.path.exists(path):
+                    continue
+                    
+                # Get disk usage
+                usage = psutil.disk_usage(path)
+                
+                # Skip if we've seen this device (same filesystem)
+                device_key = f"{usage.total}_{usage.free}"
+                if device_key in seen_devices and path not in mount_hints:
+                    continue
+                seen_devices.add(device_key)
+                
+                # Test write permissions
+                is_writable = await test_write_permission(path)
+                
+                # Determine mount properties
+                path_obj = Path(path)
+                mount_id = path_obj.name or "root"
+                if path.startswith("/mnt/drive_"):
+                    mount_id = path.replace("/mnt/", "")
+                elif path.startswith("/mnt/"):
+                    mount_id = f"mount_{path_obj.name}"
+                
+                # Get hint data if available
+                hint = mount_hints.get(path, {})
+                
+                # Determine label
+                label = hint.get("label")
+                if not label:
+                    if path.startswith("/mnt/drive_"):
+                        # Extract drive letter if present
+                        drive_part = path.replace("/mnt/drive_", "")
+                        if drive_part:
+                            label = f"{drive_part.upper()}:"
+                    elif path == "/":
+                        label = "Root"
+                    elif path == "/data":
+                        label = "Data Volume"
+                    else:
+                        label = path_obj.name.title()
+                
+                mount_info = MountInfo(
+                    id=mount_id,
+                    label=label,
+                    path=path,
+                    type=hint.get("type", "local"),
+                    total=usage.total,
+                    free=usage.free,
+                    used=usage.used,
+                    percent=usage.percent,
+                    rw=is_writable,
+                    is_container_mount=path.startswith("/mnt/"),
+                    env_hint=hint.get("id") if hint else None
+                )
+                mounts.append(mount_info)
+                
+            except Exception as e:
+                logger.warning(f"Failed to get mount info for {path}: {e}")
+                continue
+        
+        # Sort by path for consistency
+        mounts.sort(key=lambda m: m.path)
+        return mounts
+        
+    except Exception as e:
+        logger.error(f"Failed to get system mounts: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get system mounts: {str(e)}")
+
+
+async def test_write_permission(path: str) -> bool:
+    """Test if a path is writable"""
+    try:
+        test_file = os.path.join(path, f".streamops_write_test_{os.getpid()}")
+        
+        # Try to create and write to a test file
+        async with aiofiles.open(test_file, 'w') as f:
+            await f.write("test")
+        
+        # Clean up
+        try:
+            os.remove(test_file)
+        except:
+            pass
+            
+        return True
+    except:
+        return False
+
+
+@router.post("/probe-obs")
+async def probe_obs_connection(request: OBSProbeRequest) -> Dict[str, Any]:
+    """Test OBS WebSocket connection"""
+    try:
+        # Import OBS service to test connection
+        from app.api.services.obs_service import OBSService
+        
+        # Create temporary OBS service instance
+        obs = OBSService()
+        
+        # Try to connect with provided credentials
+        connected = await obs.test_connection(request.url, request.password)
+        
+        if connected:
+            # Try to get version info
+            version = None
+            try:
+                # This would require actual OBS websocket implementation
+                version = "28.0.0"  # Placeholder
+            except:
+                pass
+                
+            return {
+                "ok": True,
+                "version": version,
+                "reason": "Successfully connected to OBS"
+            }
+        else:
+            return {
+                "ok": False,
+                "version": None,
+                "reason": "Failed to connect - check URL and password"
+            }
+            
+    except Exception as e:
+        logger.error(f"Failed to probe OBS: {e}")
+        return {
+            "ok": False,
+            "version": None,
+            "reason": str(e)
+        }

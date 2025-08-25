@@ -407,3 +407,32 @@ class OBSService:
                     await callback(data)
                 except Exception as e:
                     logger.error(f"Error in callback for {event}: {e}")
+    
+    async def test_connection(self, url: str, password: str) -> bool:
+        """Test OBS WebSocket connection with provided credentials"""
+        try:
+            # Parse URL to get host and port
+            import re
+            match = re.match(r'ws://([^:]+):(\d+)', url)
+            if not match:
+                logger.error(f"Invalid OBS WebSocket URL: {url}")
+                return False
+            
+            host = match.group(1)
+            port = int(match.group(2))
+            
+            # Try to connect with provided credentials
+            test_client = obs.ReqClient(
+                host=host,
+                port=port,
+                password=password,
+                timeout=5
+            )
+            
+            # If connection succeeds, disconnect and return True
+            test_client.disconnect()
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to test OBS connection: {e}")
+            return False

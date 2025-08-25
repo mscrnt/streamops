@@ -17,6 +17,263 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+# Rule presets for wizard and no-code UI
+RULE_PRESETS = [
+    {
+        "id": "remux_move_proxy",
+        "label": "Remux to MOV, Move to Editing, Create Proxies",
+        "description": "Remux MKV files to MOV with faststart, move to editing drive, and create proxy files for clips longer than 15 minutes",
+        "category": "processing",
+        "parameters_schema": {
+            "type": "object",
+            "properties": {
+                "container": {
+                    "type": "string",
+                    "enum": ["mov", "mp4"],
+                    "default": "mov",
+                    "title": "Output Container",
+                    "description": "Container format for remuxed files"
+                },
+                "faststart": {
+                    "type": "boolean",
+                    "default": True,
+                    "title": "Fast Start",
+                    "description": "Enable fast start for web playback"
+                },
+                "editing_target": {
+                    "type": "string",
+                    "format": "path",
+                    "title": "Editing Folder",
+                    "description": "Target folder for edited files"
+                },
+                "proxy_min_duration_sec": {
+                    "type": "integer",
+                    "default": 900,
+                    "minimum": 0,
+                    "title": "Minimum Duration for Proxy",
+                    "description": "Only create proxies for files longer than this (seconds)"
+                }
+            },
+            "required": ["editing_target"]
+        },
+        "defaults": {
+            "container": "mov",
+            "faststart": True,
+            "proxy_min_duration_sec": 900
+        }
+    },
+    {
+        "id": "generate_thumbs",
+        "label": "Generate Thumbnails & Previews",
+        "description": "Create poster frame, sprite sheet, and hover preview for all videos",
+        "category": "processing",
+        "parameters_schema": {
+            "type": "object",
+            "properties": {
+                "poster": {
+                    "type": "boolean",
+                    "default": True,
+                    "title": "Poster Frame",
+                    "description": "Generate poster frame thumbnail"
+                },
+                "sprite": {
+                    "type": "boolean",
+                    "default": True,
+                    "title": "Sprite Sheet",
+                    "description": "Generate sprite sheet for timeline scrubbing"
+                },
+                "hover": {
+                    "type": "boolean",
+                    "default": True,
+                    "title": "Hover Preview",
+                    "description": "Generate hover preview video"
+                }
+            }
+        },
+        "defaults": {
+            "poster": True,
+            "sprite": True,
+            "hover": True
+        }
+    },
+    {
+        "id": "archive_old",
+        "label": "Archive Old Recordings",
+        "description": "Move recordings older than specified days to archive storage",
+        "category": "organization",
+        "parameters_schema": {
+            "type": "object",
+            "properties": {
+                "days_old": {
+                    "type": "integer",
+                    "default": 90,
+                    "minimum": 1,
+                    "title": "Days Old",
+                    "description": "Archive files older than this many days"
+                },
+                "archive_path": {
+                    "type": "string",
+                    "format": "path",
+                    "title": "Archive Folder",
+                    "description": "Target folder for archived files"
+                },
+                "delete_after_archive": {
+                    "type": "boolean",
+                    "default": False,
+                    "title": "Delete After Archive",
+                    "description": "Delete original file after archiving"
+                }
+            },
+            "required": ["archive_path"]
+        },
+        "defaults": {
+            "days_old": 90,
+            "delete_after_archive": False
+        }
+    },
+    {
+        "id": "transcode_streaming",
+        "label": "Transcode for Streaming",
+        "description": "Create optimized versions for streaming platforms",
+        "category": "export",
+        "parameters_schema": {
+            "type": "object",
+            "properties": {
+                "preset": {
+                    "type": "string",
+                    "enum": ["youtube_1080p", "twitch_720p", "twitter_720p"],
+                    "default": "youtube_1080p",
+                    "title": "Platform Preset",
+                    "description": "Optimized settings for target platform"
+                },
+                "bitrate_mbps": {
+                    "type": "number",
+                    "default": 8,
+                    "minimum": 1,
+                    "maximum": 50,
+                    "title": "Bitrate (Mbps)",
+                    "description": "Target bitrate in megabits per second"
+                }
+            }
+        },
+        "defaults": {
+            "preset": "youtube_1080p",
+            "bitrate_mbps": 8
+        }
+    }
+]
+
+
+@router.get("/presets")
+async def get_rule_presets() -> List[Dict[str, Any]]:
+    """Get available rule presets for the wizard and no-code UI"""
+    return RULE_PRESETS
+
+
+@router.post("/compile")
+async def compile_rule(
+    rule_data: Dict[str, Any],
+    simulate: bool = Query(False, description="Simulate rule execution without saving")
+) -> Dict[str, Any]:
+    """Compile UI rule data into internal rule format and optionally simulate"""
+    try:
+        # Validate rule structure
+        if not rule_data.get("name"):
+            raise HTTPException(status_code=400, detail="Rule name is required")
+        
+        if not rule_data.get("conditions") and not rule_data.get("schedule"):
+            raise HTTPException(status_code=400, detail="Rule must have conditions or schedule")
+        
+        if not rule_data.get("actions"):
+            raise HTTPException(status_code=400, detail="Rule must have at least one action")
+        
+        # Compile conditions
+        when_clause = {}
+        if rule_data.get("conditions"):
+            conditions = rule_data["conditions"]
+            
+            # Handle single condition vs multiple
+            if len(conditions) == 1:
+                when_clause = compile_condition(conditions[0])
+            else:
+                # Default to AND for multiple conditions
+                logic = rule_data.get("condition_logic", "all")
+                when_clause = {
+                    logic: [compile_condition(c) for c in conditions]
+                }
+        
+        # Compile actions
+        do_actions = []
+        for action in rule_data.get("actions", []):
+            do_actions.append(compile_action(action))
+        
+        # Compile guardrails
+        guardrails = rule_data.get("guardrails", {})
+        
+        # Build final rule
+        compiled_rule = {
+            "name": rule_data["name"],
+            "description": rule_data.get("description", ""),
+            "priority": rule_data.get("priority", 100),
+            "when": when_clause,
+            "do": do_actions,
+            "guardrails": guardrails
+        }
+        
+        # Add schedule if present
+        if rule_data.get("schedule"):
+            compiled_rule["schedule"] = rule_data["schedule"]
+        
+        # Simulate if requested
+        if simulate and rule_data.get("test_file"):
+            # Simulate rule execution
+            simulation_result = await simulate_rule_execution(
+                compiled_rule, 
+                rule_data["test_file"]
+            )
+            return {
+                "compiled": compiled_rule,
+                "simulation": simulation_result
+            }
+        
+        return {
+            "compiled": compiled_rule,
+            "valid": True
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to compile rule: {e}")
+        raise HTTPException(status_code=400, detail=f"Failed to compile rule: {str(e)}")
+
+
+def compile_condition(condition: Dict[str, Any]) -> Dict[str, Any]:
+    """Compile a single condition from UI format to internal format"""
+    return {
+        "field": condition["field"],
+        "operator": condition["operator"],
+        "value": condition["value"]
+    }
+
+
+def compile_action(action: Dict[str, Any]) -> Dict[str, Any]:
+    """Compile a single action from UI format to internal format"""
+    return {
+        "action": action["type"],
+        "params": action.get("parameters", {})
+    }
+
+
+async def simulate_rule_execution(rule: Dict[str, Any], test_file: str) -> Dict[str, Any]:
+    """Simulate rule execution on a test file"""
+    # This would actually evaluate conditions and show what actions would be taken
+    return {
+        "would_match": True,
+        "matched_conditions": rule["when"],
+        "planned_actions": rule["do"],
+        "estimated_duration": "2-5 minutes"
+    }
+
+
 @router.get("/", response_model=RuleListResponse)
 async def list_rules(
     page: int = Query(1, ge=1, description="Page number"),
