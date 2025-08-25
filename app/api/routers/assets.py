@@ -370,10 +370,25 @@ async def get_recent_assets(
     limit: int = Query(10, ge=1, le=100, description="Number of recent assets to return"),
     db=Depends(get_db)
 ) -> List[AssetResponse]:
-    """Get recently added assets"""
+    """Get recently added video assets only"""
     try:
+        # Filter for video files by extension
         cursor = await db.execute(
             """SELECT * FROM so_assets 
+               WHERE (
+                   abs_path LIKE '%.mp4' OR 
+                   abs_path LIKE '%.mov' OR 
+                   abs_path LIKE '%.mkv' OR 
+                   abs_path LIKE '%.avi' OR 
+                   abs_path LIKE '%.flv' OR 
+                   abs_path LIKE '%.webm' OR
+                   abs_path LIKE '%.ts' OR
+                   abs_path LIKE '%.m2ts' OR
+                   abs_path LIKE '%.mts' OR
+                   abs_path LIKE '%.wmv' OR
+                   abs_path LIKE '%.mpg' OR
+                   abs_path LIKE '%.mpeg'
+               )
                ORDER BY created_at DESC 
                LIMIT ?""",
             (limit,)
@@ -397,18 +412,8 @@ async def get_recent_assets(
                 "size_bytes": row[3]
             }
             
-            # Determine asset type from container/extension
-            container = row[14] if row[14] else ""
-            ext = os.path.splitext(row[1])[1].lower() if row[1] else ""
-            
-            if container in ["mp4", "mov", "mkv", "avi", "flv", "webm"] or ext in [".mp4", ".mov", ".mkv", ".avi", ".flv", ".webm"]:
-                asset_type = "video"
-            elif ext in [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"]:
-                asset_type = "image"
-            elif ext in [".mp3", ".wav", ".flac", ".aac", ".ogg", ".m4a"]:
-                asset_type = "audio"
-            else:
-                asset_type = "other"
+            # All results are videos since we filtered in the query
+            asset_type = "video"
             
             assets.append(AssetResponse(
                 id=row[0],

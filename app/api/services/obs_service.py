@@ -39,28 +39,35 @@ class OBSService:
             host = match.group(1)
             port = int(match.group(2))
             
-            # Connect request client
-            self.client = obs.ReqClient(
-                host=host,
-                port=port,
-                password=self.ws_password
-            )
+            # Run blocking connection in executor
+            loop = asyncio.get_event_loop()
             
-            # Connect event client
-            self.event_client = obs.EventClient(
-                host=host,
-                port=port,
-                password=self.ws_password
-            )
+            def _connect_sync():
+                # Connect request client
+                self.client = obs.ReqClient(
+                    host=host,
+                    port=port,
+                    password=self.ws_password
+                )
+                
+                # Connect event client
+                self.event_client = obs.EventClient(
+                    host=host,
+                    port=port,
+                    password=self.ws_password
+                )
+                
+                # Register event handlers
+                self._register_event_handlers()
+                return True
             
-            # Register event handlers
-            self._register_event_handlers()
+            await loop.run_in_executor(None, _connect_sync)
             
             self.connected = True
             logger.info(f"Connected to OBS WebSocket at {self.ws_url}")
             
-            # Get initial status
-            await self._update_status()
+            # Start status update task in background
+            asyncio.create_task(self._update_status())
             
         except Exception as e:
             logger.error(f"Failed to connect to OBS: {e}")

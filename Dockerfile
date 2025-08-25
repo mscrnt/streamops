@@ -15,21 +15,53 @@ COPY tailwind.config.js postcss.config.js vite.config.js ./
 # Build UI
 RUN npm run build
 
-# Stage 2: Python base with all dependencies
-FROM python:3.11-slim AS base
+# Stage 2: NVIDIA CUDA base with Python and dependencies
+FROM nvidia/cuda:12.9.0-cudnn-runtime-ubuntu22.04 AS base
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg \
+# Set non-interactive mode and timezone
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=UTC
+
+# Install Python 3.11 and system dependencies
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    # Add repository for Python 3.11
+    software-properties-common \
     wget \
     curl \
     xz-utils \
     sqlite3 \
     gcc \
     g++ \
-    python3-dev \
     procps \
+    tzdata \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+    # Python 3.11
+    python3.11 \
+    python3.11-dev \
+    python3.11-venv \
+    python3.11-distutils \
+    python3-pip \
+    # FFmpeg with CUDA support
+    ffmpeg \
+    # Additional media libraries
+    libavcodec-extra \
+    libavformat-dev \
+    libavutil-dev \
+    libswscale-dev \
+    libx264-dev \
+    libx265-dev \
+    nvidia-cuda-toolkit \
     && rm -rf /var/lib/apt/lists/*
+
+# Set Python 3.11 as default
+RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 \
+    && update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1
+
+# Install pip for Python 3.11
+RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11
 
 # Install NATS server
 RUN wget -O /tmp/nats.tar.gz https://github.com/nats-io/nats-server/releases/download/v2.10.24/nats-server-v2.10.24-linux-amd64.tar.gz \
@@ -50,7 +82,7 @@ WORKDIR /opt/streamops
 
 # Copy and install Python dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN python3.11 -m pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY app ./app

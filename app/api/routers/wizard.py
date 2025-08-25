@@ -273,14 +273,14 @@ async def apply_wizard_config(
                 # Insert rule into database
                 await db.execute(
                     """INSERT INTO so_rules 
-                       (id, name, description, enabled, priority, rule_json, created_at, updated_at)
-                       VALUES (?, ?, ?, 1, ?, ?, datetime('now'), datetime('now'))""",
+                       (id, name, enabled, priority, when_json, do_json, created_at, updated_at)
+                       VALUES (?, ?, 1, ?, ?, ?, datetime('now'), datetime('now'))""",
                     (
                         f"wizard_{rule_config.id}",
                         rule_json["name"],
-                        rule_json.get("description", ""),
                         rule_json.get("priority", 100),
-                        json.dumps(rule_json)
+                        json.dumps(rule_json.get("when", {})),
+                        json.dumps(rule_json.get("do", []))
                     )
                 )
                 applied_items.append(f"Rule: {rule_json['name']}")

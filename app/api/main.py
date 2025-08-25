@@ -7,10 +7,11 @@ import os
 import logging
 from pathlib import Path
 
-from app.api.routers import health, config, assets, jobs, rules, overlays, reports, drives, system, wizard
+from app.api.routers import health, config, assets, jobs, rules, overlays, reports, drives, system, wizard, websocket
 from app.api.db.database import init_db, close_db
 from app.api.services.nats_service import NATSService
 from app.api.services.config_service import ConfigService
+from app.api.services.gpu_service import gpu_service
 from app.overlay.server import overlay_handler, overlay_manager, sponsor_rotation
 from app.overlay.renderer import overlay_renderer
 
@@ -43,6 +44,16 @@ async def lifespan(app: FastAPI):
     await init_db()
     logger.info("Database initialized")
     
+    # Initialize GPU service
+    logger.info("Detecting GPU capabilities...")
+    gpu_info = await gpu_service.get_gpu_info()
+    app.state.gpu = gpu_service
+    if gpu_info["available"]:
+        logger.info(f"GPU detected: {gpu_info['name']} - NVENC: {gpu_info['nvenc_available']}, NVDEC: {gpu_info['nvdec_available']}")
+    else:
+        logger.info("No GPU detected, using CPU for all processing")
+    logger.info("GPU service initialized")
+    
     # Initialize NATS if enabled
     if os.getenv("NATS_ENABLE", "true").lower() == "true":
         logger.info("Initializing NATS...")
@@ -51,12 +62,30 @@ async def lifespan(app: FastAPI):
         app.state.nats = nats_service
         logger.info("NATS initialized")
     
+    # Initialize OBS service if configured
+    obs_url = os.getenv("OBS_WS_URL") or config_service._custom_config.get("obs", {}).get("url")
+    if obs_url:
+        logger.info("Initializing OBS WebSocket connection...")
+        from app.api.services.obs_service import OBSService
+        obs_service = OBSService(nats_service if 'nats_service' in locals() else None)
+        await obs_service.connect()
+        app.state.obs = obs_service
+        logger.info(f"OBS connection status: {obs_service.connected}")
+    else:
+        app.state.obs = None
+        logger.info("OBS WebSocket not configured")
+    
     logger.info("StreamOps API started successfully")
     
     yield
     
     # Shutdown
     logger.info("Shutting down StreamOps API...")
+    
+    # Close OBS connection
+    if hasattr(app.state, 'obs') and app.state.obs:
+        await app.state.obs.disconnect()
+        logger.info("OBS disconnected")
     
     # Close NATS connection
     if hasattr(app.state, 'nats'):

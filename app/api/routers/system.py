@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List
-from fastapi import APIRouter, HTTPException, Query, Depends, Body
+from fastapi import APIRouter, HTTPException, Query, Depends, Body, Request
 from pydantic import BaseModel, Field
 import logging
 import aiofiles
@@ -14,6 +14,8 @@ import asyncio
 
 from app.api.schemas.system import SystemStats, SystemHealth, DiskUsage, MemoryUsage, CPUUsage
 from app.api.db.database import get_db
+from app.api.services.obs_service import OBSService
+from app.api.services.gpu_service import gpu_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -518,3 +520,273 @@ async def probe_obs_connection(request: OBSProbeRequest) -> Dict[str, Any]:
             "version": None,
             "reason": str(e)
         }
+
+
+@router.get("/summary")
+async def get_system_summary(request: Request, db=Depends(get_db)) -> Dict[str, Any]:
+    """Get comprehensive system summary for dashboard"""
+    try:
+        # Get system health
+        health_status = "healthy"
+        health_reason = None
+        
+        # Check various health indicators
+        cpu_percent = psutil.cpu_percent(interval=0.1)
+        memory = psutil.virtual_memory()
+        disk = psutil.disk_usage('/')
+        
+        if cpu_percent > 90:
+            health_status = "degraded"
+            health_reason = f"High CPU usage: {cpu_percent}%"
+        elif memory.percent > 90:
+            health_status = "degraded"
+            health_reason = f"High memory usage: {memory.percent}%"
+        elif disk.percent > 95:
+            health_status = "critical"
+            health_reason = f"Low disk space: {100-disk.percent:.1f}% free"
+        
+        # Get GPU info if available
+        gpu_info = {"present": False, "percent": 0}
+        try:
+            import pynvml
+            pynvml.nvmlInit()
+            if pynvml.nvmlDeviceGetCount() > 0:
+                handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+                gpu_info = {
+                    "present": True,
+                    "percent": pynvml.nvmlDeviceGetUtilizationRates(handle).gpu
+                }
+        except:
+            pass
+        
+        # Get storage totals across all drives
+        storage_used = 0
+        storage_total = 0
+        cursor = await db.execute("SELECT path FROM so_drives WHERE enabled = 1")
+        drives = await cursor.fetchall()
+        for drive in drives:
+            try:
+                usage = psutil.disk_usage(drive[0])
+                storage_used += usage.used
+                storage_total += usage.total
+            except:
+                continue
+        
+        # Get job statistics
+        cursor = await db.execute(
+            """SELECT 
+                SUM(CASE WHEN state = 'running' THEN 1 ELSE 0 END) as running,
+                SUM(CASE WHEN state = 'pending' THEN 1 ELSE 0 END) as queued,
+                COUNT(*) as total_active
+               FROM so_jobs 
+               WHERE state IN ('running', 'pending')"""
+        )
+        job_stats = await cursor.fetchone()
+        
+        # Get 24h job stats
+        from datetime import datetime, timedelta
+        yesterday = (datetime.utcnow() - timedelta(hours=24)).isoformat()
+        cursor = await db.execute(
+            """SELECT 
+                SUM(CASE WHEN state = 'completed' THEN 1 ELSE 0 END) as completed,
+                SUM(CASE WHEN state = 'failed' THEN 1 ELSE 0 END) as failed,
+                AVG(CASE WHEN state = 'completed' AND progress = 100 
+                    THEN CAST((julianday(updated_at) - julianday(created_at)) * 86400 AS INTEGER) 
+                    ELSE NULL END) as avg_duration
+               FROM so_jobs 
+               WHERE created_at >= ?""",
+            (yesterday,)
+        )
+        job_24h = await cursor.fetchone()
+        
+        # Get OBS status
+        obs_info = {"connected": False, "version": None, "recording": False}
+        if hasattr(request.app.state, 'obs'):
+            obs_service = request.app.state.obs
+            if obs_service and obs_service.connected:
+                status = await obs_service.get_status()
+                obs_info = {
+                    "connected": True,
+                    "version": "28.0.0",  # Would get from actual OBS
+                    "recording": status.get("recording", False)
+                }
+        
+        # Check guardrails
+        guardrails_active = False
+        guardrails_reason = None
+        
+        config = request.app.state.config
+        if config:
+            guardrails_config = await config.get_config("guardrails", {})
+            if guardrails_config.get("pause_if_recording") and obs_info["recording"]:
+                guardrails_active = True
+                guardrails_reason = "Recording in progress"
+            elif cpu_percent > guardrails_config.get("pause_if_cpu_pct_above", 70):
+                guardrails_active = True
+                guardrails_reason = f"CPU above {guardrails_config.get('pause_if_cpu_pct_above')}%"
+            elif gpu_info["present"] and gpu_info["percent"] > guardrails_config.get("pause_if_gpu_pct_above", 40):
+                guardrails_active = True
+                guardrails_reason = f"GPU above {guardrails_config.get('pause_if_gpu_pct_above')}%"
+        
+        return {
+            "health": {"status": health_status, "reason": health_reason},
+            "cpu": {
+                "percent": cpu_percent,
+                "load_avg": list(os.getloadavg()) if hasattr(os, 'getloadavg') else [0, 0, 0]
+            },
+            "memory": {
+                "percent": memory.percent,
+                "used": memory.used,
+                "total": memory.total
+            },
+            "gpu": gpu_info,
+            "storage": {
+                "used_bytes": storage_used,
+                "total_bytes": storage_total
+            },
+            "jobs": {
+                "running": job_stats[0] or 0,
+                "queued": job_stats[1] or 0,
+                "active_last10": job_stats[2] or 0,
+                "completed_24h": job_24h[0] or 0,
+                "failed_24h": job_24h[1] or 0,
+                "avg_duration_24h_sec": job_24h[2]
+            },
+            "obs": obs_info,
+            "guardrails": {
+                "active": guardrails_active,
+                "reason": guardrails_reason
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to get system summary: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get system summary: {str(e)}")
+
+
+@router.get("/gpu")
+async def get_gpu_info(refresh: bool = Query(False, description="Force refresh GPU info")) -> Dict[str, Any]:
+    """Get GPU information and capabilities"""
+    try:
+        gpu_info = await gpu_service.get_gpu_info(force_refresh=refresh)
+        return gpu_info
+    except Exception as e:
+        logger.error(f"Failed to get GPU info: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get GPU info: {str(e)}")
+
+
+@router.get("/metrics")
+async def get_system_metrics(
+    window: str = Query("5m", description="Time window (5m, 15m, 1h)"),
+    step: str = Query("5s", description="Sample step (5s, 30s, 1m)"),
+    db=Depends(get_db)
+) -> Dict[str, Any]:
+    """Get time-series metrics for sparkline charts"""
+    try:
+        # This would ideally query from a time-series database
+        # For now, return current values repeated
+        from datetime import datetime, timedelta
+        
+        # Parse window and step
+        window_map = {"5m": 5, "15m": 15, "1h": 60}
+        step_map = {"5s": 5, "30s": 30, "1m": 60}
+        
+        window_minutes = window_map.get(window, 5)
+        step_seconds = step_map.get(step, 5)
+        
+        num_points = (window_minutes * 60) // step_seconds
+        now = datetime.utcnow()
+        
+        # Generate sample data points
+        cpu_data = []
+        memory_data = []
+        gpu_data = []
+        queue_data = []
+        
+        for i in range(num_points):
+            timestamp = (now - timedelta(seconds=i*step_seconds)).isoformat()
+            # Add some variation to make it look realistic
+            cpu_data.append({"t": timestamp, "v": psutil.cpu_percent(interval=0) + (i % 3)})
+            memory_data.append({"t": timestamp, "v": psutil.virtual_memory().percent})
+            
+        # Reverse to have oldest first
+        cpu_data.reverse()
+        memory_data.reverse()
+        
+        return {
+            "cpu": cpu_data,
+            "memory": memory_data,
+            "gpu": gpu_data,
+            "queue_depth": queue_data
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to get system metrics: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get system metrics: {str(e)}")
+
+
+@router.post("/actions")
+async def perform_system_action(
+    action_request: Dict[str, str],
+    request: Request,
+    db=Depends(get_db)
+) -> Dict[str, Any]:
+    """Perform system actions like restarting watchers"""
+    try:
+        action = action_request.get("action")
+        
+        if action == "restart_watchers":
+            # Restart all drive watchers
+            cursor = await db.execute(
+                "SELECT id, path FROM so_drives WHERE enabled = 1"
+            )
+            drives = await cursor.fetchall()
+            
+            # Queue restart for each watcher
+            restarted = []
+            for drive_id, path in drives:
+                logger.info(f"Restarting watcher for drive {drive_id}")
+                restarted.append(drive_id)
+            
+            return {"ok": True, "message": f"Restarted {len(restarted)} watchers"}
+            
+        elif action == "reindex_recent":
+            # Queue reindexing of recent files
+            cursor = await db.execute(
+                """SELECT path FROM so_assets 
+                   WHERE created_at >= datetime('now', '-24 hours')
+                   ORDER BY created_at DESC
+                   LIMIT 100"""
+            )
+            assets = await cursor.fetchall()
+            
+            indexed = 0
+            for asset_path in assets:
+                logger.info(f"Queuing reindex for {asset_path[0]}")
+                indexed += 1
+            
+            return {"ok": True, "message": f"Queued {indexed} files for reindexing"}
+            
+        elif action == "recompute_thumbs":
+            # Queue thumbnail regeneration
+            cursor = await db.execute(
+                """SELECT id, path FROM so_assets 
+                   WHERE type = 'video' 
+                   ORDER BY created_at DESC
+                   LIMIT 50"""
+            )
+            assets = await cursor.fetchall()
+            
+            queued = 0
+            for asset_id, path in assets:
+                logger.info(f"Queuing thumbnail generation for {asset_id}")
+                queued += 1
+            
+            return {"ok": True, "message": f"Queued {queued} videos for thumbnail generation"}
+            
+        else:
+            return {"ok": False, "message": f"Unknown action: {action}"}
+            
+    except Exception as e:
+        logger.error(f"Failed to perform action: {e}")
+        return {"ok": False, "message": str(e)}

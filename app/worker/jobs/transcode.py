@@ -80,9 +80,14 @@ class TranscodeJob(BaseJob):
         custom_preset = data.get("custom_preset", {})
         start_time = data.get("start_time")  # Optional clip start
         end_time = data.get("end_time")      # Optional clip end
+        use_gpu = data.get("use_gpu", True)  # Enable GPU by default
         
         if not input_path or not os.path.exists(input_path):
             raise ValueError(f"Input file not found: {input_path}")
+        
+        # Check for GPU availability
+        gpu_available = await self.check_gpu_available()
+        use_hardware = use_gpu and gpu_available
         
         # Get preset settings
         if preset_name in self.PRESETS:
@@ -142,6 +147,12 @@ class TranscodeJob(BaseJob):
             "-stats"  # Enable progress stats
         ]
         
+        # Add hardware acceleration if available
+        if use_hardware:
+            # Use NVIDIA GPU decoding
+            cmd.extend(["-hwaccel", "cuda"])
+            cmd.extend(["-hwaccel_output_format", "cuda"])
+        
         # Add input options
         if start_time:
             cmd.extend(["-ss", str(start_time)])
@@ -157,7 +168,13 @@ class TranscodeJob(BaseJob):
         # Video codec settings
         video_codec = preset.get("video_codec")
         if video_codec:
-            cmd.extend(["-c:v", video_codec])
+            # Use hardware encoder if available and codec is h264/h265
+            if use_hardware and video_codec == "libx264":
+                cmd.extend(["-c:v", "h264_nvenc"])
+            elif use_hardware and video_codec == "libx265":
+                cmd.extend(["-c:v", "hevc_nvenc"])
+            else:
+                cmd.extend(["-c:v", video_codec])
             
             # Video quality settings
             if preset.get("crf"):
@@ -302,3 +319,25 @@ class TranscodeJob(BaseJob):
             return float(time_str)
         except:
             return 0.0
+    
+    async def check_gpu_available(self) -> bool:
+        """Check if NVIDIA GPU is available for encoding"""
+        try:
+            # Check for nvidia-smi
+            result = await self.run_command(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"])
+            if result[0] == 0 and result[1].strip():
+                logger.info(f"GPU detected: {result[1].strip()}")
+                
+                # Check if FFmpeg has NVENC support
+                ffmpeg_result = await self.run_command(["ffmpeg", "-encoders"])
+                if ffmpeg_result[0] == 0:
+                    encoders = ffmpeg_result[1]
+                    if "h264_nvenc" in encoders or "hevc_nvenc" in encoders:
+                        logger.info("NVENC hardware encoding available")
+                        return True
+                    else:
+                        logger.warning("GPU detected but NVENC not available in FFmpeg")
+            return False
+        except Exception as e:
+            logger.debug(f"GPU check failed: {e}")
+            return False

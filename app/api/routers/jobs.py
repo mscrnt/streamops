@@ -182,42 +182,53 @@ async def create_job(job: JobCreate, db=Depends(get_db)) -> JobResponse:
         raise HTTPException(status_code=500, detail=f"Failed to create job: {str(e)}")
 
 
-@router.get("/active", response_model=List[JobResponse])
-async def get_active_jobs(db=Depends(get_db)) -> List[JobResponse]:
-    """Get all active jobs (running or pending)"""
+
+@router.get("/active")
+async def get_active_jobs(
+    limit: int = Query(10, description="Maximum number of jobs to return"),
+    db=Depends(get_db)
+) -> List[Dict[str, Any]]:
+    """Get active jobs for dashboard"""
     try:
         cursor = await db.execute(
-            """SELECT * FROM so_jobs 
-               WHERE state IN ('running', 'pending', 'queued')
-               ORDER BY created_at DESC"""
+            """SELECT j.id, j.type, j.asset_id, j.state, j.progress, j.created_at, j.updated_at,
+                      a.abs_path
+               FROM so_jobs j
+               LEFT JOIN so_assets a ON j.asset_id = a.id
+               WHERE j.state IN ('running', 'pending')
+               ORDER BY j.updated_at DESC
+               LIMIT ?""",
+            (limit,)
         )
         rows = await cursor.fetchall()
         
         jobs = []
         for row in rows:
-            payload = json.loads(row[3]) if row[3] else {}
-            jobs.append(JobResponse(
-                id=row[0],
-                job_type=JobType(row[1]),
-                status=JobStatus(row[4]),
-                priority=JobPriority(payload.get('priority', 'normal')),
-                params=payload.get('params', {}),
-                asset_id=row[2],
-                session_id=payload.get('session_id'),
-                progress=row[5] or 0.0,
-                error_message=row[6],
-                result=json.loads(payload.get('result', '{}')) if payload.get('result') else None,
-                retry_count=payload.get('retry_count', 0),
-                max_retries=payload.get('max_retries', 3),
-                timeout_seconds=payload.get('timeout_seconds'),
-                created_at=datetime.fromisoformat(row[7]),
-                started_at=datetime.fromisoformat(payload.get('started_at')) if payload.get('started_at') else None,
-                completed_at=datetime.fromisoformat(payload.get('completed_at')) if payload.get('completed_at') else None
-            ))
+            # Extract filename from path if it exists
+            asset_path = row[7]
+            asset_name = "Unknown"
+            if asset_path:
+                asset_name = asset_path.split('/')[-1] if '/' in asset_path else asset_path
+            
+            jobs.append({
+                "id": row[0],
+                "type": row[1],
+                "asset_id": row[2],
+                "asset_name": asset_name,
+                "asset_path": asset_path,
+                "status": row[3],
+                "progress": row[4],
+                "started_at": row[5],
+                "updated_at": row[6]
+            })
         
         return jobs
+        
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch active jobs: {str(e)}")
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Failed to get active jobs: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get active jobs: {str(e)}")
 
 
 @router.get("/stats")

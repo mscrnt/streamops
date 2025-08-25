@@ -93,9 +93,14 @@ class ConfigService:
         """Save config without acquiring lock (internal use only)"""
         try:
             self.config_path.parent.mkdir(parents=True, exist_ok=True)
+            # Include both standard and custom config
+            all_config = {
+                **self.config.model_dump(),
+                "custom": self._custom_config
+            }
             with open(self.config_path, 'w') as f:
                 json.dump(
-                    self.config.model_dump(),
+                    all_config,
                     f,
                     indent=2,
                     default=str

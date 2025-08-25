@@ -2,6 +2,7 @@ from typing import Dict, Any
 import os
 import logging
 from pathlib import Path
+import subprocess
 
 from app.worker.jobs.base import BaseJob
 
@@ -19,9 +20,14 @@ class RemuxJob(BaseJob):
         output_format = data.get("output_format", "mov")
         output_path = data.get("output_path")
         faststart = data.get("faststart", True)
+        use_gpu = data.get("use_gpu", True)  # Enable GPU by default
         
         if not input_path or not os.path.exists(input_path):
             raise ValueError(f"Input file not found: {input_path}")
+        
+        # Check for GPU availability (for potential future GPU-based remuxing)
+        gpu_available = await self.check_gpu_available()
+        use_hardware = use_gpu and gpu_available
         
         # Generate output path if not provided
         if not output_path:
@@ -76,5 +82,21 @@ class RemuxJob(BaseJob):
             "success": True,
             "output_path": output_path,
             "output_size": output_size,
-            "output_format": output_format
+            "output_format": output_format,
+            "gpu_used": use_hardware
         }
+    
+    async def check_gpu_available(self) -> bool:
+        """Check if NVIDIA GPU is available"""
+        try:
+            # Check for nvidia-smi
+            result = await self.run_command(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"])
+            if result[0] == 0 and result[1].strip():
+                logger.debug(f"GPU detected for remux: {result[1].strip()}")
+                # Note: Remuxing doesn't benefit from GPU acceleration since it's just stream copying
+                # But we check anyway for consistency and future enhancements
+                return True
+            return False
+        except Exception as e:
+            logger.debug(f"GPU check failed: {e}")
+            return False

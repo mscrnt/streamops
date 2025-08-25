@@ -13,7 +13,10 @@ import {
   Download,
   Upload,
   ExternalLink,
-  Info
+  Info,
+  Wifi,
+  Video,
+  AlertTriangle
 } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
@@ -91,6 +94,8 @@ export default function Settings() {
     { value: 'system', label: 'System', icon: Server },
     { value: 'processing', label: 'Processing', icon: Zap },
     { value: 'storage', label: 'Storage', icon: HardDrive },
+    { value: 'obs', label: 'OBS', icon: Wifi },
+    { value: 'guardrails', label: 'Guardrails', icon: AlertTriangle },
     { value: 'interface', label: 'Interface', icon: Monitor },
     { value: 'notifications', label: 'Notifications', icon: Bell },
     { value: 'security', label: 'Security', icon: Shield },
@@ -384,6 +389,125 @@ export default function Settings() {
                   <span className="text-sm">Detect and remove duplicate files</span>
                 </label>
               </FormField>
+            </CardContent>
+          </Card>
+        </Tabs.Content>
+
+        {/* OBS Settings */}
+        <Tabs.Content value="obs" className="mt-6 space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>OBS WebSocket Configuration</CardTitle>
+              <CardDescription>
+                Connect to OBS for recording detection and automation
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <FormField label="WebSocket URL">
+                <Input
+                  placeholder="ws://localhost:4455"
+                  value={localConfig.custom?.obs?.url || ''}
+                  onChange={(e) => handleConfigChange('custom', 'obs', { ...localConfig.custom?.obs, url: e.target.value })}
+                />
+              </FormField>
+
+              <FormField label="WebSocket Password">
+                <Input
+                  type="password"
+                  placeholder="Enter OBS WebSocket password"
+                  value={localConfig.custom?.obs?.password || ''}
+                  onChange={(e) => handleConfigChange('custom', 'obs', { ...localConfig.custom?.obs, password: e.target.value })}
+                />
+              </FormField>
+
+              <FormField label="Auto-Connect">
+                <label className="flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    checked={localConfig.custom?.obs?.enabled || false}
+                    onChange={(e) => handleConfigChange('custom', 'obs', { ...localConfig.custom?.obs, enabled: e.target.checked })}
+                    className="rounded border-border"
+                  />
+                  <span className="text-sm">Automatically connect to OBS on startup</span>
+                </label>
+              </FormField>
+
+              <div className="pt-4">
+                <Button variant="outline" className="w-full">
+                  <Wifi className="h-4 w-4 mr-2" />
+                  Test OBS Connection
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </Tabs.Content>
+
+        {/* Guardrails Settings */}
+        <Tabs.Content value="guardrails" className="mt-6 space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Processing Guardrails</CardTitle>
+              <CardDescription>
+                Automatically pause processing to protect system resources
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <FormField label="Pause When Recording">
+                <label className="flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    checked={localConfig.custom?.guardrails?.pause_if_recording || true}
+                    onChange={(e) => handleConfigChange('custom', 'guardrails', { ...localConfig.custom?.guardrails, pause_if_recording: e.target.checked })}
+                    className="rounded border-border"
+                  />
+                  <span className="text-sm">Pause all processing when OBS is recording</span>
+                </label>
+              </FormField>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <FormField label="CPU Threshold (%)">
+                  <Input
+                    type="number"
+                    min="50"
+                    max="100"
+                    value={localConfig.custom?.guardrails?.pause_if_cpu_pct_above || 70}
+                    onChange={(e) => handleConfigChange('custom', 'guardrails', { ...localConfig.custom?.guardrails, pause_if_cpu_pct_above: parseInt(e.target.value) })}
+                  />
+                </FormField>
+
+                <FormField label="GPU Threshold (%)">
+                  <Input
+                    type="number"
+                    min="30"
+                    max="100"
+                    value={localConfig.custom?.guardrails?.pause_if_gpu_pct_above || 40}
+                    onChange={(e) => handleConfigChange('custom', 'guardrails', { ...localConfig.custom?.guardrails, pause_if_gpu_pct_above: parseInt(e.target.value) })}
+                  />
+                </FormField>
+              </div>
+
+              <FormField label="Minimum Free Disk Space (GB)">
+                <Input
+                  type="number"
+                  min="1"
+                  max="100"
+                  value={localConfig.custom?.guardrails?.require_disk_space_gb || 5}
+                  onChange={(e) => handleConfigChange('custom', 'guardrails', { ...localConfig.custom?.guardrails, require_disk_space_gb: parseInt(e.target.value) })}
+                />
+              </FormField>
+
+              <div className="p-4 bg-muted rounded-lg">
+                <div className="flex items-start space-x-2">
+                  <AlertTriangle className="h-5 w-5 text-yellow-500 mt-0.5" />
+                  <div className="space-y-1">
+                    <p className="text-sm font-medium">How Guardrails Work</p>
+                    <p className="text-xs text-muted-foreground">
+                      When any guardrail condition is met, all processing jobs will be paused automatically. 
+                      Jobs will resume when conditions return to normal.
+                    </p>
+                  </div>
+                </div>
+              </div>
             </CardContent>
           </Card>
         </Tabs.Content>

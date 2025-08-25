@@ -21,9 +21,14 @@ class ProxyJob(BaseJob):
         resolution = data.get("resolution", "1080")  # Target height
         timecode_start = data.get("timecode_start", "00:00:00:00")
         audio_channels = data.get("audio_channels", None)  # Auto-detect if None
+        use_gpu = data.get("use_gpu", True)  # Enable GPU by default
         
         if not input_path or not os.path.exists(input_path):
             raise ValueError(f"Input file not found: {input_path}")
+        
+        # Check for GPU availability
+        gpu_available = await self.check_gpu_available()
+        use_hardware = use_gpu and gpu_available
         
         # Generate output path if not provided
         if not output_path:
@@ -72,9 +77,15 @@ class ProxyJob(BaseJob):
         cmd = [
             "ffmpeg",
             "-hide_banner",
-            "-loglevel", "error",
-            "-i", input_path
+            "-loglevel", "error"
         ]
+        
+        # Add hardware acceleration for decoding if available
+        if use_hardware:
+            cmd.extend(["-hwaccel", "cuda"])
+            cmd.extend(["-hwaccel_output_format", "cuda"])
+        
+        cmd.extend(["-i", input_path])
         
         # Map video stream
         cmd.extend(["-map", "0:v:0"])
@@ -87,10 +98,16 @@ class ProxyJob(BaseJob):
         
         # Scale video to target resolution
         target_height = int(resolution)
-        scale_filter = f"scale=-2:{target_height}"
         
-        # Add additional video filters if needed
-        video_filters = [scale_filter]
+        # Use GPU scaling if hardware acceleration is enabled
+        if use_hardware:
+            # Use CUDA scale filter
+            scale_filter = f"scale_cuda=-2:{target_height}:format=yuv422p10le"
+            # Transfer from GPU back to CPU for DNxHR encoding
+            video_filters = [scale_filter, "hwdownload", "format=yuv422p10le"]
+        else:
+            scale_filter = f"scale=-2:{target_height}"
+            video_filters = [scale_filter]
         
         # Apply video filters
         cmd.extend(["-vf", ",".join(video_filters)])
@@ -222,3 +239,25 @@ class ProxyJob(BaseJob):
             return float(fps_str)
         except:
             return 25.0  # Default fallback
+    
+    async def check_gpu_available(self) -> bool:
+        """Check if NVIDIA GPU is available for acceleration"""
+        try:
+            # Check for nvidia-smi
+            result = await self.run_command(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"])
+            if result[0] == 0 and result[1].strip():
+                logger.info(f"GPU detected for proxy: {result[1].strip()}")
+                
+                # Check if FFmpeg has CUDA support
+                ffmpeg_result = await self.run_command(["ffmpeg", "-filters"])
+                if ffmpeg_result[0] == 0:
+                    filters = ffmpeg_result[1]
+                    if "scale_cuda" in filters:
+                        logger.info("CUDA scaling available for proxy generation")
+                        return True
+                    else:
+                        logger.warning("GPU detected but CUDA filters not available in FFmpeg")
+            return False
+        except Exception as e:
+            logger.debug(f"GPU check failed: {e}")
+            return False

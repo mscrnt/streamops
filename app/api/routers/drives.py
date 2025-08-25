@@ -221,6 +221,84 @@ async def create_drive_watch(
         raise HTTPException(status_code=500, detail=f"Failed to create drive watch: {str(e)}")
 
 
+@router.get("/status")
+async def get_drives_status(db=Depends(get_db)) -> List[Dict[str, Any]]:
+    """Get status of all drives for dashboard"""
+    try:
+        cursor = await db.execute(
+            """SELECT id, path, label, type, config_json, stats_json, enabled 
+               FROM so_drives 
+               ORDER BY label"""
+        )
+        rows = await cursor.fetchall()
+        
+        drives_status = []
+        for row in rows:
+            drive_id, path, label, drive_type, config_json, stats_json, enabled = row
+            config = json.loads(config_json) if config_json else {}
+            stats = json.loads(stats_json) if stats_json else {}
+            
+            # Get current disk usage
+            total = 0
+            free = 0
+            rw = False
+            health = "unknown"
+            
+            if os.path.exists(path):
+                try:
+                    usage = psutil.disk_usage(path)
+                    total = usage.total
+                    free = usage.free
+                    
+                    # Test write permission
+                    test_file = os.path.join(path, f".streamops_test_{os.getpid()}")
+                    try:
+                        with open(test_file, 'w') as f:
+                            f.write("test")
+                        os.remove(test_file)
+                        rw = True
+                    except:
+                        rw = False
+                    
+                    # Determine health
+                    if not rw:
+                        health = "read_only"
+                    elif usage.percent > 95:
+                        health = "critical"
+                    elif usage.percent > 90:
+                        health = "warning"
+                    else:
+                        health = "ok"
+                        
+                except Exception as e:
+                    logger.warning(f"Failed to get usage for {path}: {e}")
+                    health = "error"
+            else:
+                health = "missing"
+            
+            # Get watcher status
+            watcher_status = stats.get("watcher_status", "stopped" if not enabled else "listening")
+            
+            drives_status.append({
+                "id": drive_id,
+                "label": label or drive_id,
+                "path": path,
+                "role": config.get("role", drive_type),
+                "total": total,
+                "free": free,
+                "rw": rw,
+                "watcher": watcher_status,
+                "last_event_at": stats.get("last_event_at"),
+                "health": health
+            })
+        
+        return drives_status
+        
+    except Exception as e:
+        logger.error(f"Failed to get drives status: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get drives status: {str(e)}")
+
+
 @router.get("/{drive_id}", response_model=DriveResponse)
 async def get_drive(drive_id: str, db=Depends(get_db)) -> DriveResponse:
     """Get a specific drive watch by ID"""
@@ -471,6 +549,8 @@ async def restart_watcher(
         return {"message": f"Watcher for drive {drive_id} restarted"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to restart watcher: {str(e)}")
+
+
 
 
 @router.post("/watchers/restart")

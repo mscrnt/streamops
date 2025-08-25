@@ -1,276 +1,230 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useCallback } from 'react'
 import useWebSocket, { ReadyState } from 'react-use-websocket'
-import { useJobStore, useAssetStore, useNotificationStore } from '@/store/useStore'
+import { useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 
-// WebSocket hook for real-time updates
-export const useStreamOpsWebSocket = () => {
-  const [isReconnecting, setIsReconnecting] = useState(false)
+const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:7767/ws'
+
+export function useStreamOpsWebSocket() {
+  const queryClient = useQueryClient()
   const reconnectAttempts = useRef(0)
-  const maxReconnectAttempts = 10
+  const maxReconnectAttempts = 5
   
-  // Store actions
-  const { updateJob, addJob, setActiveJobs } = useJobStore()
-  const { updateAsset, addAsset } = useAssetStore()
-  const { addNotification } = useNotificationStore()
-  
-  // WebSocket URL - adjust protocol based on current location
-  const wsUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`
-  
+  // WebSocket connection
   const {
     sendMessage,
-    sendJsonMessage,
     lastMessage,
-    lastJsonMessage,
     readyState,
-    getWebSocket,
-  } = useWebSocket(wsUrl, {
+    getWebSocket
+  } = useWebSocket(WS_URL, {
     onOpen: () => {
       console.log('WebSocket connected')
       reconnectAttempts.current = 0
-      setIsReconnecting(false)
       
-      // Send initial subscription message
-      sendJsonMessage({
+      // Subscribe to relevant events
+      sendMessage(JSON.stringify({
         type: 'subscribe',
-        topics: ['jobs', 'assets', 'system']
-      })
+        channels: ['system', 'jobs', 'assets', 'drives']
+      }))
     },
-    onClose: (event) => {
-      console.log('WebSocket disconnected:', event.code, event.reason)
-      
-      if (event.code !== 1000) { // Not a normal closure
-        setIsReconnecting(true)
-        reconnectAttempts.current += 1
-        
-        if (reconnectAttempts.current <= maxReconnectAttempts) {
-          toast.error(`Connection lost. Attempting to reconnect... (${reconnectAttempts.current}/${maxReconnectAttempts})`)
-        } else {
-          toast.error('Connection lost. Please refresh the page.')
-          setIsReconnecting(false)
-        }
+    onClose: () => {
+      console.log('WebSocket disconnected')
+    },
+    onError: (error) => {
+      console.error('WebSocket error:', error)
+      if (reconnectAttempts.current >= maxReconnectAttempts) {
+        console.log('Max reconnection attempts reached, falling back to polling')
       }
+      reconnectAttempts.current++
     },
-    onError: (event) => {
-      console.error('WebSocket error:', event)
-      toast.error('WebSocket connection error')
-    },
-    shouldReconnect: (closeEvent) => {
-      // Reconnect unless it was a normal closure or we've exceeded max attempts
-      return closeEvent.code !== 1000 && reconnectAttempts.current < maxReconnectAttempts
-    },
-    reconnectAttempts: maxReconnectAttempts,
-    reconnectInterval: (attemptNumber) => Math.min(1000 * Math.pow(1.5, attemptNumber), 30000),
+    shouldReconnect: () => reconnectAttempts.current < maxReconnectAttempts,
+    reconnectInterval: (attemptNumber) => Math.min(1000 * 2 ** attemptNumber, 10000),
+    reconnectAttempts: maxReconnectAttempts
   })
-
+  
   // Handle incoming messages
   useEffect(() => {
-    if (lastJsonMessage) {
-      handleWebSocketMessage(lastJsonMessage)
-    }
-  }, [lastJsonMessage])
-
-  const handleWebSocketMessage = (message) => {
+    if (!lastMessage) return
+    
     try {
-      const { type } = message
-
-      // Handle messages based on their type
-      switch (type) {
-        case 'subscription_confirmed':
-          console.log('Subscription confirmed for topics:', message.topics)
+      const data = JSON.parse(lastMessage.data)
+      
+      switch (data.type) {
+        // System updates
+        case 'system.summary':
+          queryClient.setQueryData(['system', 'summary'], data.payload)
           break
           
-        case 'system_subscription_confirmed':
-          console.log('System subscription confirmed')
+        case 'system.metrics':
+          queryClient.setQueryData(['system', 'metrics'], (old) => ({
+            ...old,
+            ...data.payload
+          }))
           break
           
-        case 'jobs_update':
-          if (message.jobs) {
-            message.jobs.forEach(job => {
-              updateJob(job)
-            })
+        case 'system.health':
+          queryClient.setQueryData(['system', 'summary'], (old) => ({
+            ...old,
+            health: data.payload
+          }))
+          if (data.payload.status === 'degraded' || data.payload.status === 'critical') {
+            toast.error(`System health: ${data.payload.reason}`)
           }
           break
           
-        case 'system_stats':
-          if (message.stats) {
-            // Update system stats in store if needed
-            console.log('System stats:', message.stats)
+        // Job updates
+        case 'job.created':
+        case 'job.started':
+        case 'job.progress':
+        case 'job.completed':
+        case 'job.failed':
+          // Invalidate active jobs query
+          queryClient.invalidateQueries({ queryKey: ['jobs', 'active'] })
+          
+          // Update specific job if viewing it
+          if (data.payload.id) {
+            queryClient.setQueryData(['jobs', data.payload.id], data.payload)
+          }
+          
+          // Show notifications for important events
+          if (data.type === 'job.failed') {
+            toast.error(`Job failed: ${data.payload.type}`)
           }
           break
           
-        case 'job_created':
-        case 'job_updated':
-        case 'job_completed':
-        case 'job_failed':
-          handleJobUpdate(type, message)
+        // Asset updates
+        case 'asset.created':
+        case 'asset.updated':
+          // Invalidate recent assets query
+          queryClient.invalidateQueries({ queryKey: ['assets', 'recent'] })
+          
+          // Update specific asset if viewing it
+          if (data.payload.id) {
+            queryClient.setQueryData(['assets', data.payload.id], data.payload)
+          }
           break
           
-        case 'asset_created':
-        case 'asset_updated':
-        case 'asset_deleted':
-          handleAssetUpdate(type, message)
+        // Drive updates
+        case 'drive.status':
+          queryClient.setQueryData(['drives', 'status'], data.payload)
           break
           
+        case 'drive.watcher':
+          // Update specific drive watcher status
+          queryClient.setQueryData(['drives', 'status'], (old) => {
+            if (!old) return old
+            return old.map(drive => 
+              drive.id === data.payload.drive_id 
+                ? { ...drive, watcher_enabled: data.payload.enabled }
+                : drive
+            )
+          })
+          break
+          
+        // OBS updates
+        case 'obs.connected':
+        case 'obs.disconnected':
+        case 'obs.recording.started':
+        case 'obs.recording.stopped':
+          queryClient.setQueryData(['system', 'summary'], (old) => ({
+            ...old,
+            obs: {
+              connected: data.type === 'obs.connected' || data.type === 'obs.recording.started' || data.type === 'obs.recording.stopped',
+              recording: data.type === 'obs.recording.started',
+              version: data.payload?.version || old?.obs?.version
+            }
+          }))
+          
+          // Show OBS notifications
+          if (data.type === 'obs.recording.started') {
+            toast.success('OBS recording started')
+          } else if (data.type === 'obs.recording.stopped') {
+            toast.success('OBS recording stopped')
+          }
+          break
+          
+        // Guardrails updates
+        case 'guardrails.activated':
+          queryClient.setQueryData(['system', 'summary'], (old) => ({
+            ...old,
+            guardrails: {
+              active: true,
+              reason: data.payload.reason
+            }
+          }))
+          toast.warning(`Guardrails activated: ${data.payload.reason}`)
+          break
+          
+        case 'guardrails.deactivated':
+          queryClient.setQueryData(['system', 'summary'], (old) => ({
+            ...old,
+            guardrails: {
+              active: false,
+              reason: null
+            }
+          }))
+          toast.success('Guardrails deactivated - processing resumed')
+          break
+          
+        // Notifications
         case 'notification':
-          if (message.notification) {
-            addNotification(message.notification)
+          switch (data.payload.level) {
+            case 'error':
+              toast.error(data.payload.message)
+              break
+            case 'warning':
+              toast(data.payload.message, { icon: '⚠️' })
+              break
+            case 'success':
+              toast.success(data.payload.message)
+              break
+            default:
+              toast(data.payload.message)
           }
           break
           
         default:
-          console.log('Unhandled WebSocket message:', message)
+          console.log('Unknown WebSocket message type:', data.type)
       }
     } catch (error) {
-      console.error('Error handling WebSocket message:', error, message)
+      console.error('Failed to parse WebSocket message:', error)
     }
-  }
-
-  const handleJobUpdate = (type, data) => {
-    switch (type) {
-      case 'job_created':
-        addJob(data)
-        addNotification({
-          type: 'info',
-          title: 'New Job Created',
-          message: `${data.type} job started for ${data.asset_path || 'unknown asset'}`,
-        })
-        break
-        
-      case 'job_updated':
-        updateJob(data.id, data)
-        
-        // Show notifications for important status changes
-        if (data.status === 'completed') {
-          addNotification({
-            type: 'success',
-            title: 'Job Completed',
-            message: `${data.type} job completed successfully`,
-          })
-        } else if (data.status === 'failed') {
-          addNotification({
-            type: 'error',
-            title: 'Job Failed',
-            message: `${data.type} job failed: ${data.error || 'Unknown error'}`,
-          })
-        }
-        break
-        
-      case 'job_progress':
-        updateJob(data.id, { 
-          progress: data.progress,
-          status: 'running',
-          updated_at: new Date().toISOString()
-        })
-        break
-        
-      case 'active_jobs':
-        setActiveJobs(data)
-        break
-        
-      default:
-        console.log('Unhandled job update:', type, data)
-    }
-  }
-
-  const handleAssetUpdate = (type, data) => {
-    switch (type) {
-      case 'asset_created':
-        addAsset(data)
-        addNotification({
-          type: 'info',
-          title: 'New Asset Indexed',
-          message: `${data.filename} has been added to your library`,
-        })
-        break
-        
-      case 'asset_updated':
-        updateAsset(data.id, data)
-        break
-        
-      case 'asset_thumbnails_ready':
-        updateAsset(data.asset_id, { 
-          has_thumbnails: true,
-          thumbnail_path: data.thumbnail_path,
-          updated_at: new Date().toISOString()
-        })
-        break
-        
-      default:
-        console.log('Unhandled asset update:', type, data)
-    }
-  }
-
-  const handleSystemUpdate = (type, data) => {
-    switch (type) {
-      case 'system_stats':
-        // Update system stats in store if needed
-        break
-        
-      case 'drive_status':
-        addNotification({
-          type: data.status === 'online' ? 'success' : 'warning',
-          title: 'Drive Status Change',
-          message: `Drive ${data.path} is now ${data.status}`,
-        })
-        break
-        
-      case 'system_alert':
-        addNotification({
-          type: data.level || 'warning',
-          title: 'System Alert',
-          message: data.message,
-        })
-        break
-        
-      default:
-        console.log('Unhandled system update:', type, data)
-    }
-  }
-
-  const handleNotificationUpdate = (type, data) => {
-    addNotification(data)
-  }
-
-  // Connection status helpers
+  }, [lastMessage, queryClient])
+  
+  // Connection status
   const connectionStatus = {
     [ReadyState.CONNECTING]: 'Connecting',
-    [ReadyState.OPEN]: 'Open',
+    [ReadyState.OPEN]: 'Connected',
     [ReadyState.CLOSING]: 'Closing',
-    [ReadyState.CLOSED]: 'Closed',
+    [ReadyState.CLOSED]: 'Disconnected',
     [ReadyState.UNINSTANTIATED]: 'Uninstantiated',
   }[readyState]
-
-  const isConnected = readyState === ReadyState.OPEN
-  const isConnecting = readyState === ReadyState.CONNECTING || isReconnecting
-
+  
+  // Send a message to the server
+  const send = useCallback((type, payload = {}) => {
+    if (readyState === ReadyState.OPEN) {
+      sendMessage(JSON.stringify({ type, payload }))
+    } else {
+      console.warn('WebSocket not connected, cannot send message')
+    }
+  }, [readyState, sendMessage])
+  
+  // Subscribe to specific channels
+  const subscribe = useCallback((channels) => {
+    send('subscribe', { channels })
+  }, [send])
+  
+  // Unsubscribe from channels
+  const unsubscribe = useCallback((channels) => {
+    send('unsubscribe', { channels })
+  }, [send])
+  
   return {
-    sendMessage,
-    sendJsonMessage,
-    lastMessage,
-    lastJsonMessage,
-    readyState,
     connectionStatus,
-    isConnected,
-    isConnecting,
-    isReconnecting,
-    getWebSocket,
+    isConnected: readyState === ReadyState.OPEN,
+    send,
+    subscribe,
+    unsubscribe,
+    readyState
   }
 }
-
-// Hook for subscribing to specific job updates
-// Hook for subscribing to specific job updates
-export const useJobWebSocket = (jobId) => {
-  const [job, setJob] = useState(null)
-  // Use global store instead of creating another WebSocket connection
-  return { job, isConnected: true }
-}
-
-// Hook for real-time system monitoring  
-export const useSystemWebSocket = () => {
-  const [systemStats, setSystemStats] = useState(null)
-  // Use global store instead of creating another WebSocket connection
-  return { systemStats, isConnected: true }
-}
-
-export default useStreamOpsWebSocket
