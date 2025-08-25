@@ -1,10 +1,14 @@
-from fastapi import APIRouter, HTTPException, Depends, Query, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Depends, Query, BackgroundTasks, Response
+from fastapi.responses import StreamingResponse, FileResponse
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
+from pathlib import Path
+from pydantic import BaseModel, Field
 import uuid
 import os
 import json
 import logging
+import aiosqlite
 
 from app.api.schemas.assets import (
     AssetResponse, AssetCreate, AssetUpdate, AssetListResponse,
@@ -16,6 +20,31 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# Additional Pydantic models for new endpoints
+class AssetDetailResponse(BaseModel):
+    asset: Dict[str, Any]
+    thumbs: Dict[str, str]
+    jobs_recent: List[Dict[str, Any]]
+
+class AssetAction(BaseModel):
+    action: str
+    params: Dict[str, Any] = {}
+
+class BulkAssetAction(BaseModel):
+    ids: List[str]
+    action: str
+    params: Dict[str, Any] = {}
+
+class ActionResponse(BaseModel):
+    ok: bool
+    job_ids: List[str] = []
+    message: Optional[str] = None
+
+class PathResponse(BaseModel):
+    container_path: str
+    host_hint: Optional[str] = None
+    can_open_on_host: bool = False
+
 
 @router.get("/", response_model=AssetListResponse)
 async def list_assets(
@@ -23,9 +52,11 @@ async def list_assets(
     per_page: int = Query(50, ge=1, le=100, description="Items per page"),
     status: Optional[AssetStatus] = Query(None, description="Filter by status"),
     asset_type: Optional[AssetType] = Query(None, description="Filter by asset type"),
+    types: Optional[str] = Query(None, description="Alternative parameter for asset_type"),
     session_id: Optional[str] = Query(None, description="Filter by session ID"),
     tags: Optional[List[str]] = Query(None, description="Filter by tags"),
     search: Optional[str] = Query(None, description="Full-text search query"),
+    sort: str = Query("created_at:desc", description="Sort field and direction"),
     db=Depends(get_db)
 ) -> AssetListResponse:
     """List assets with filtering, search, and pagination"""
@@ -36,9 +67,13 @@ async def list_assets(
         if status:
             query += " AND status = ?"
             params.append(status.value)
-        if asset_type:
+        
+        # Handle both asset_type and types parameters
+        type_filter = asset_type or (AssetType(types) if types else None)
+        if type_filter:
             query += " AND json_extract(streams_json, '$.type') = ?"
-            params.append(asset_type.value)
+            params.append(type_filter.value)
+        
         if session_id:
             query += " AND json_extract(tags_json, '$.session_id') = ?"
             params.append(session_id)
@@ -48,7 +83,12 @@ async def list_assets(
             params.extend([search_term, search_term])
         
         # Apply sorting
-        query += " ORDER BY created_at DESC"
+        sort_field, sort_dir = sort.split(':') if ':' in sort else (sort, 'desc')
+        valid_sort_fields = ['created_at', 'updated_at', 'size', 'abs_path']
+        if sort_field in valid_sort_fields:
+            query += f" ORDER BY {sort_field} {sort_dir.upper()}"
+        else:
+            query += " ORDER BY created_at DESC"
         
         # Get total count
         count_query = query.replace("SELECT *", "SELECT COUNT(*)", 1)
@@ -1205,5 +1245,404 @@ async def _create_proxy(asset_id: str, filepath: str, force_regenerate: bool):
             logger.error(f"Failed to create proxy for asset {asset_id}: {e}")
     except Exception as e:
         logger.error(f"Failed to create proxy for asset {asset_id}: {e}")
+
+
+@router.get("/{asset_id}/detail", response_model=AssetDetailResponse)
+async def get_asset_detail(
+    asset_id: str,
+    db=Depends(get_db)
+) -> AssetDetailResponse:
+    """Get detailed asset information including thumbnails and recent jobs."""
+    
+    try:
+        # Get asset details
+        cursor = await db.execute("""
+            SELECT 
+                id, name, abs_path, size_bytes, status, 
+                duration_sec, container, video_codec, audio_codec,
+                width, height, fps, created_at, updated_at, tags_json,
+                streams_json
+            FROM so_assets
+            WHERE id = ?
+        """, (asset_id,))
+        
+        row = await cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Asset not found")
+        
+        asset = {
+            "id": row[0],
+            "name": row[1],
+            "abs_path": row[2],
+            "size": row[3],
+            "status": row[4],
+            "duration_sec": row[5],
+            "container": row[6],
+            "video_codec": row[7],
+            "audio_codec": row[8],
+            "width": row[9],
+            "height": row[10],
+            "fps": row[11],
+            "created_at": row[12],
+            "updated_at": row[13],
+            "tags": json.loads(row[14]) if row[14] else [],
+            "streams": json.loads(row[15]) if row[15] else []
+        }
+        
+        # Get thumbnails
+        thumbs = {
+            "poster": f"/api/assets/{asset_id}/poster.jpg",
+            "sprite": f"/api/assets/{asset_id}/sprite.jpg",
+            "hover_mp4": f"/api/assets/{asset_id}/hover.mp4"
+        }
+        
+        # Get recent jobs for this asset
+        cursor = await db.execute("""
+            SELECT id, type, state, started_at, ended_at,
+                   json_extract(metadata, '$.duration_sec') as duration_sec
+            FROM so_jobs
+            WHERE json_extract(metadata, '$.asset_id') = ?
+            ORDER BY created_at DESC
+            LIMIT 10
+        """, (asset_id,))
+        
+        jobs = []
+        async for job_row in cursor:
+            job = {
+                "id": job_row[0],
+                "type": job_row[1],
+                "state": job_row[2],
+                "started_at": job_row[3],
+                "ended_at": job_row[4],
+                "duration_sec": job_row[5]
+            }
+            jobs.append(job)
+        
+        return AssetDetailResponse(
+            asset=asset,
+            thumbs=thumbs,
+            jobs_recent=jobs
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get asset details: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get asset details: {str(e)}")
+
+
+async def create_job(db, job_type: str, asset_id: str, metadata: dict) -> str:
+    """Helper function to create a job in the database."""
+    job_id = str(uuid.uuid4())
+    await db.execute("""
+        INSERT INTO so_jobs (id, type, asset_id, payload_json, state, created_at, updated_at)
+        VALUES (?, ?, ?, ?, 'pending', datetime('now'), datetime('now'))
+    """, (job_id, job_type, asset_id, json.dumps(metadata)))
+    await db.commit()
+    return job_id
+
+
+@router.post("/{asset_id}/actions", response_model=ActionResponse)
+async def execute_asset_action(
+    asset_id: str,
+    action: AssetAction,
+    db=Depends(get_db)
+) -> ActionResponse:
+    """Execute an action on a single asset."""
+    
+    try:
+        # Verify asset exists
+        cursor = await db.execute("SELECT abs_path, status FROM so_assets WHERE id = ?", (asset_id,))
+        row = await cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Asset not found")
+        
+        asset_path, asset_status = row
+        
+        # Check if asset is missing
+        if asset_status == "missing" and action.action != "reindex":
+            raise HTTPException(status_code=400, detail="Asset is missing on disk. Please reindex first.")
+        
+        # Create job based on action
+        job_ids = []
+        
+        if action.action == "remux":
+            metadata = {
+                "asset_id": asset_id,
+                "input_path": asset_path,
+                "container": action.params.get("container", "mov"),
+                "faststart": action.params.get("faststart", True)
+            }
+            job_id = await create_job(db, "ffmpeg_remux", asset_id, metadata)
+            job_ids.append(job_id)
+            
+        elif action.action == "proxy":
+            metadata = {
+                "asset_id": asset_id,
+                "input_path": asset_path,
+                "resolution": action.params.get("resolution", "1080p")
+            }
+            job_id = await create_job(db, "proxy_create", asset_id, metadata)
+            job_ids.append(job_id)
+            
+        elif action.action == "thumbnails":
+            metadata = {
+                "asset_id": asset_id,
+                "input_path": asset_path
+            }
+            job_id = await create_job(db, "thumbs_generate", asset_id, metadata)
+            job_ids.append(job_id)
+            
+        elif action.action == "move":
+            metadata = {
+                "asset_id": asset_id,
+                "source_path": asset_path,
+                "dest_path": action.params.get("dest")
+            }
+            job_id = await create_job(db, "file_move", asset_id, metadata)
+            job_ids.append(job_id)
+            
+        elif action.action == "archive":
+            metadata = {
+                "asset_id": asset_id,
+                "source_path": asset_path,
+                "policy": action.params.get("policy", "default")
+            }
+            job_id = await create_job(db, "asset_archive", asset_id, metadata)
+            job_ids.append(job_id)
+            
+        elif action.action == "delete":
+            metadata = {
+                "asset_id": asset_id,
+                "path": asset_path,
+                "to_trash": action.params.get("to_trash", True)
+            }
+            job_id = await create_job(db, "asset_delete", asset_id, metadata)
+            job_ids.append(job_id)
+            
+        elif action.action == "reindex":
+            metadata = {
+                "asset_id": asset_id,
+                "path": asset_path
+            }
+            job_id = await create_job(db, "asset_reindex", asset_id, metadata)
+            job_ids.append(job_id)
+            
+        else:
+            raise HTTPException(status_code=400, detail=f"Unknown action: {action.action}")
+        
+        return ActionResponse(ok=True, job_ids=job_ids)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to execute action: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to execute action: {str(e)}")
+
+
+@router.post("/bulk", response_model=ActionResponse)
+async def execute_bulk_action(
+    bulk_action: BulkAssetAction,
+    db=Depends(get_db)
+) -> ActionResponse:
+    """Execute an action on multiple assets."""
+    
+    job_ids = []
+    
+    try:
+        # Process each asset
+        for asset_id in bulk_action.ids:
+            # Verify asset exists
+            cursor = await db.execute("SELECT abs_path, status FROM so_assets WHERE id = ?", (asset_id,))
+            row = await cursor.fetchone()
+            if not row:
+                continue  # Skip missing assets
+            
+            asset_path, asset_status = row
+            
+            # Skip missing assets for non-reindex actions
+            if asset_status == "missing" and bulk_action.action != "reindex":
+                continue
+            
+            # Create job for this asset
+            if bulk_action.action == "archive":
+                metadata = {
+                    "asset_id": asset_id,
+                    "source_path": asset_path,
+                    "policy": bulk_action.params.get("policy", "default")
+                }
+                job_id = await create_job(db, "asset_archive", asset_id, metadata)
+                job_ids.append(job_id)
+            
+            elif bulk_action.action == "delete":
+                metadata = {
+                    "asset_id": asset_id,
+                    "path": asset_path,
+                    "to_trash": bulk_action.params.get("to_trash", True)
+                }
+                job_id = await create_job(db, "asset_delete", asset_id, metadata)
+                job_ids.append(job_id)
+            
+            elif bulk_action.action == "thumbnails":
+                metadata = {
+                    "asset_id": asset_id,
+                    "input_path": asset_path
+                }
+                job_id = await create_job(db, "thumbs_generate", asset_id, metadata)
+                job_ids.append(job_id)
+            
+            elif bulk_action.action == "proxy":
+                metadata = {
+                    "asset_id": asset_id,
+                    "input_path": asset_path,
+                    "resolution": bulk_action.params.get("resolution", "1080p")
+                }
+                job_id = await create_job(db, "proxy_create", asset_id, metadata)
+                job_ids.append(job_id)
+            
+            elif bulk_action.action == "remux":
+                metadata = {
+                    "asset_id": asset_id,
+                    "input_path": asset_path,
+                    "container": bulk_action.params.get("container", "mov"),
+                    "faststart": bulk_action.params.get("faststart", True)
+                }
+                job_id = await create_job(db, "ffmpeg_remux", asset_id, metadata)
+                job_ids.append(job_id)
+        
+        return ActionResponse(
+            ok=True, 
+            job_ids=job_ids,
+            message=f"Queued {len(job_ids)} jobs for {len(bulk_action.ids)} assets"
+        )
+        
+    except Exception as e:
+        logger.error(f"Failed to execute bulk action: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to execute bulk action: {str(e)}")
+
+
+@router.get("/{asset_id}/download")
+async def download_asset(
+    asset_id: str,
+    db=Depends(get_db)
+):
+    """Download an asset file."""
+    
+    try:
+        # TODO: Check if downloads are allowed from settings
+        
+        # Get asset path
+        cursor = await db.execute("SELECT abs_path, name FROM so_assets WHERE id = ?", (asset_id,))
+        row = await cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Asset not found")
+        
+        file_path, file_name = row
+        
+        # Check if file exists
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail="File not found on disk")
+        
+        # Return file response
+        return FileResponse(
+            path=file_path,
+            filename=file_name,
+            media_type="application/octet-stream"
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to download asset: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to download asset: {str(e)}")
+
+
+@router.get("/{asset_id}/path", response_model=PathResponse)
+async def get_asset_path(
+    asset_id: str,
+    db=Depends(get_db)
+) -> PathResponse:
+    """Get asset path information including host-mapped path."""
+    
+    try:
+        # Get asset path
+        cursor = await db.execute("SELECT abs_path FROM so_assets WHERE id = ?", (asset_id,))
+        row = await cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Asset not found")
+        
+        container_path = row[0]
+        
+        # Get drive mapping to determine host path
+        # For now, we'll provide a simple mapping
+        host_hint = None
+        
+        # Simple mapping for common mount points
+        drive_mappings = {
+            "/mnt/drive_a": "A:\\Recordings",
+            "/mnt/drive_b": "B:\\",
+            "/mnt/drive_c": "C:\\",
+            "/mnt/drive_d": "D:\\",
+            "/mnt/drive_e": "E:\\",
+            "/mnt/drive_f": "F:\\Editing"
+        }
+        
+        for mount_point, host_path in drive_mappings.items():
+            if container_path.startswith(mount_point):
+                relative_path = container_path[len(mount_point):]
+                host_hint = host_path + relative_path.replace('/', '\\')
+                break
+        
+        return PathResponse(
+            container_path=container_path,
+            host_hint=host_hint,
+            can_open_on_host=False  # Always false for now
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get asset path: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get asset path: {str(e)}")
+
+
+@router.get("/{asset_id}/poster.jpg")
+async def get_asset_poster(
+    asset_id: str,
+    db=Depends(get_db)
+):
+    """Get asset poster thumbnail."""
+    thumb_path = f"/data/thumbs/{asset_id}/poster.jpg"
+    if os.path.exists(thumb_path):
+        return FileResponse(thumb_path, media_type="image/jpeg")
+    else:
+        # Return placeholder
+        return Response(content=b"", media_type="image/jpeg", status_code=404)
+
+
+@router.get("/{asset_id}/sprite.jpg")
+async def get_asset_sprite(
+    asset_id: str,
+    db=Depends(get_db)
+):
+    """Get asset sprite sheet."""
+    sprite_path = f"/data/thumbs/{asset_id}/sprite.jpg"
+    if os.path.exists(sprite_path):
+        return FileResponse(sprite_path, media_type="image/jpeg")
+    else:
+        return Response(content=b"", media_type="image/jpeg", status_code=404)
+
+
+@router.get("/{asset_id}/hover.mp4")
+async def get_asset_hover_video(
+    asset_id: str,
+    db=Depends(get_db)
+):
+    """Get asset hover preview video."""
+    hover_path = f"/data/thumbs/{asset_id}/hover.mp4"
+    if os.path.exists(hover_path):
+        return FileResponse(hover_path, media_type="video/mp4")
+    else:
+        return Response(content=b"", media_type="video/mp4", status_code=404)
 
 
