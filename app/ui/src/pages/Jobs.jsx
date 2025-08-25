@@ -1,592 +1,877 @@
-import { useState } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useSearchParams, useNavigate } from 'react-router-dom'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { 
-  Play, 
-  Pause, 
-  Square, 
-  RefreshCw, 
-  Clock, 
-  CheckCircle, 
-  XCircle, 
-  AlertCircle,
-  MoreHorizontal,
-  Trash2,
-  RotateCcw,
-  PlayCircle,
-  PauseCircle,
-  FileText
+  Play, Pause, RefreshCw, Trash2, X, ChevronDown, Filter,
+  CheckSquare, Square, MoreVertical, Eye, Download, Copy,
+  AlertCircle, Clock, CheckCircle, XCircle, Loader2,
+  Archive, Terminal, FileJson, Activity, Zap, Info,
+  ChevronRight, Calendar, ArrowUpDown, Search
 } from 'lucide-react'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/Card'
-import { Badge, StatusBadge } from '@/components/ui/Badge'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import Button from '@/components/ui/Button'
-import { SimpleSelect } from '@/components/ui/Select'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow, TableSkeleton, TableEmpty } from '@/components/ui/Table'
-import { 
-  useJobs, 
-  useActiveJobs, 
-  useJobStats, 
-  useCancelJob, 
-  useRetryJob, 
-  useBulkJobOperation,
-  usePauseQueue,
-  useResumeQueue,
-  useClearQueue,
-  useJobHistory
-} from '@/hooks/useJobs'
-import { useStore } from '@/store/useStore'
-import { formatDuration, formatRelativeTime } from '@/lib/utils'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@radix-ui/react-dropdown-menu'
+import { Badge, StatusBadge } from '@/components/ui/Badge'
+import { useApi } from '@/hooks/useApi'
+import { formatDuration, formatRelativeTime, formatBytes } from '@/lib/utils'
+import { cn } from '@/lib/utils'
+import JobDetailsDrawer from '@/components/jobs/JobDetailsDrawer'
+import BulkActionBar from '@/components/jobs/BulkActionBar'
 import toast from 'react-hot-toast'
 
 export default function Jobs() {
+  const navigate = useNavigate()
+  const { api } = useApi()
+  const queryClient = useQueryClient()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const wsRef = useRef(null)
+  
+  // Extract URL params
+  const status = searchParams.get('status') || 'all'
+  const type = searchParams.get('type') || 'all'
+  const dateField = searchParams.get('date_field') || 'created_at'
+  const startDate = searchParams.get('start')
+  const endDate = searchParams.get('end')
+  const sort = searchParams.get('sort') || 'created_at'
+  const order = searchParams.get('order') || 'desc'
+  const page = parseInt(searchParams.get('page') || '1')
+  const perPage = parseInt(searchParams.get('per_page') || '50')
+  
   // Local state
-  const [selectedJobs, setSelectedJobs] = useState([])
-  const [showHistory, setShowHistory] = useState(false)
+  const [selected, setSelected] = useState(new Set())
+  const [detailsJobId, setDetailsJobId] = useState(null)
+  const [queuePaused, setQueuePaused] = useState(false)
+  const [confirmClearQueue, setConfirmClearQueue] = useState(false)
+  const [activeMenuId, setActiveMenuId] = useState(null)
   
-  // Store state
-  const { jobFilters, setJobFilters } = useStore()
+  // Build query params
+  const queryParams = useMemo(() => {
+    const params = new URLSearchParams()
+    if (status !== 'all') params.set('status', status)
+    if (type !== 'all') params.set('type', type)
+    params.set('date_field', dateField)
+    if (startDate) params.set('start', startDate)
+    if (endDate) params.set('end', endDate)
+    params.set('sort', sort)
+    params.set('order', order)
+    params.set('page', page.toString())
+    params.set('per_page', perPage.toString())
+    return params.toString()
+  }, [status, type, dateField, startDate, endDate, sort, order, page, perPage])
   
-  // API hooks
-  const { data: jobs, isLoading: jobsLoading, refetch: refetchJobs } = useJobs()
-  const { data: activeJobs } = useActiveJobs()
-  const { data: jobStats } = useJobStats()
-  const { data: jobHistory } = useJobHistory()
-  const cancelJob = useCancelJob()
-  const retryJob = useRetryJob()
-  const bulkOperation = useBulkJobOperation()
-  const pauseQueue = usePauseQueue()
-  const resumeQueue = useResumeQueue()
-  const clearQueue = useClearQueue()
-
-  // Data to display
-  const displayData = showHistory ? jobHistory : jobs
-  const totalActive = activeJobs?.length || 0
-  const runningCount = activeJobs?.filter(job => job.status === 'running')?.length || 0
-  const queuedCount = activeJobs?.filter(job => job.status === 'pending')?.length || 0
-
-  const handleFilterChange = (key, value) => {
-    setJobFilters({ [key]: value })
-  }
-
-  const handleSelectJob = (jobId) => {
-    setSelectedJobs(prev => 
-      prev.includes(jobId) 
-        ? prev.filter(id => id !== jobId)
-        : [...prev, jobId]
+  // Fetch jobs list
+  const { data: jobsData, isLoading, error, refetch } = useQuery({
+    queryKey: ['jobs', queryParams],
+    queryFn: async () => {
+      const response = await api.get(`/jobs/?${queryParams}`)
+      return response.data
+    },
+    refetchInterval: 5000, // Poll every 5 seconds
+    staleTime: 2000
+  })
+  
+  // Fetch summary stats
+  const { data: summary } = useQuery({
+    queryKey: ['jobs', 'summary'],
+    queryFn: async () => {
+      const response = await api.get('/jobs/summary?window=24h')
+      return response.data
+    },
+    refetchInterval: 5000,
+    staleTime: 2000
+  })
+  
+  // Check queue status
+  useEffect(() => {
+    async function checkQueueStatus() {
+      try {
+        const response = await api.get('/config')
+        setQueuePaused(response.data?.['queue.paused'] === 'true')
+      } catch (error) {
+        console.error('Failed to check queue status:', error)
+      }
+    }
+    checkQueueStatus()
+  }, [api])
+  
+  // WebSocket connection for real-time updates
+  useEffect(() => {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const wsUrl = `${protocol}//${window.location.host}/api/jobs/ws`
+    
+    function connectWebSocket() {
+      wsRef.current = new WebSocket(wsUrl)
+      
+      wsRef.current.onopen = () => {
+        console.log('Jobs WebSocket connected')
+      }
+      
+      wsRef.current.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data)
+          
+          // Handle different event types
+          switch (data.type) {
+            case 'job_progress':
+            case 'job_state':
+              // Invalidate jobs list to refresh
+              queryClient.invalidateQueries(['jobs'])
+              queryClient.invalidateQueries(['jobs', 'summary'])
+              break
+            case 'queue_state':
+              setQueuePaused(data.paused)
+              break
+            case 'queue_cleared':
+              queryClient.invalidateQueries(['jobs'])
+              queryClient.invalidateQueries(['jobs', 'summary'])
+              toast.success(`Cleared ${data.deleted_count} queued jobs`)
+              break
+          }
+        } catch (error) {
+          console.error('WebSocket message error:', error)
+        }
+      }
+      
+      wsRef.current.onerror = (error) => {
+        console.error('WebSocket error:', error)
+      }
+      
+      wsRef.current.onclose = () => {
+        console.log('WebSocket disconnected, retrying in 5s...')
+        setTimeout(connectWebSocket, 5000)
+      }
+      
+      // Send ping every 30s to keep alive
+      const pingInterval = setInterval(() => {
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send('ping')
+        }
+      }, 30000)
+      
+      return () => clearInterval(pingInterval)
+    }
+    
+    const cleanup = connectWebSocket()
+    
+    return () => {
+      cleanup?.()
+      if (wsRef.current) {
+        wsRef.current.close()
+      }
+    }
+  }, [queryClient])
+  
+  // Update URL params
+  const updateParams = useCallback((updates) => {
+    const newParams = new URLSearchParams(searchParams)
+    Object.entries(updates).forEach(([key, value]) => {
+      if (value) {
+        newParams.set(key, value)
+      } else {
+        newParams.delete(key)
+      }
+    })
+    setSearchParams(newParams)
+  }, [searchParams, setSearchParams])
+  
+  // Selection handlers
+  const toggleSelection = useCallback((jobId) => {
+    setSelected(prev => {
+      const next = new Set(prev)
+      if (next.has(jobId)) {
+        next.delete(jobId)
+      } else {
+        next.add(jobId)
+      }
+      return next
+    })
+  }, [])
+  
+  const toggleAllOnPage = useCallback((checked) => {
+    if (jobsData?.items) {
+      setSelected(prev => {
+        const next = new Set(prev)
+        jobsData.items.forEach(job => {
+          if (checked) {
+            next.add(job.id)
+          } else {
+            next.delete(job.id)
+          }
+        })
+        return next
+      })
+    }
+  }, [jobsData])
+  
+  const clearSelection = useCallback(() => {
+    setSelected(new Set())
+  }, [])
+  
+  // Action mutations
+  const cancelMutation = useMutation({
+    mutationFn: async (jobId) => {
+      const response = await api.post(`/jobs/${jobId}/cancel`)
+      return response.data
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries(['jobs'])
+      queryClient.invalidateQueries(['jobs', 'summary'])
+      toast.success('Job canceled')
+    },
+    onError: (error) => {
+      toast.error(error.message || 'Failed to cancel job')
+    }
+  })
+  
+  const retryMutation = useMutation({
+    mutationFn: async (jobId) => {
+      const response = await api.post(`/jobs/${jobId}/retry`)
+      return response.data
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries(['jobs'])
+      queryClient.invalidateQueries(['jobs', 'summary'])
+      toast.success('Job queued for retry')
+    },
+    onError: (error) => {
+      toast.error(error.message || 'Failed to retry job')
+    }
+  })
+  
+  const bulkActionMutation = useMutation({
+    mutationFn: async ({ action, ids }) => {
+      const response = await api.post('/jobs/bulk', { action, ids })
+      return response.data
+    },
+    onSuccess: (data, variables) => {
+      queryClient.invalidateQueries(['jobs'])
+      queryClient.invalidateQueries(['jobs', 'summary'])
+      const successCount = data.results.filter(r => r.ok).length
+      toast.success(`${variables.action} ${successCount} jobs`)
+      clearSelection()
+    },
+    onError: (error) => {
+      toast.error(error.message || 'Bulk action failed')
+    }
+  })
+  
+  const queueActionMutation = useMutation({
+    mutationFn: async (action) => {
+      const response = await api.post(`/queue/${action}`)
+      return response.data
+    },
+    onSuccess: (data, action) => {
+      if (action === 'pause') {
+        setQueuePaused(true)
+        toast.success('Queue paused')
+      } else if (action === 'resume') {
+        setQueuePaused(false)
+        toast.success('Queue resumed')
+      } else if (action === 'clear') {
+        queryClient.invalidateQueries(['jobs'])
+        queryClient.invalidateQueries(['jobs', 'summary'])
+        setConfirmClearQueue(false)
+      }
+    },
+    onError: (error) => {
+      toast.error(error.message || 'Queue action failed')
+    }
+  })
+  
+  // Get status badge
+  const getStatusBadge = (status) => {
+    const variants = {
+      queued: { variant: 'warning', icon: Clock },
+      pending: { variant: 'warning', icon: Clock },
+      running: { variant: 'info', icon: Activity },
+      completed: { variant: 'success', icon: CheckCircle },
+      failed: { variant: 'destructive', icon: XCircle },
+      canceled: { variant: 'secondary', icon: X }
+    }
+    
+    const config = variants[status] || { variant: 'secondary', icon: Info }
+    const Icon = config.icon
+    
+    return (
+      <Badge variant={config.variant} className="capitalize">
+        <Icon className="w-3 h-3 mr-1" />
+        {status}
+      </Badge>
     )
   }
-
-  const handleSelectAll = () => {
-    if (selectedJobs.length === displayData?.length) {
-      setSelectedJobs([])
-    } else {
-      setSelectedJobs(displayData?.map(job => job.id) || [])
+  
+  // Get job type label
+  const getJobTypeLabel = (type) => {
+    const labels = {
+      ffmpeg_remux: 'Remux',
+      ffmpeg_transcode: 'Transcode',
+      proxy: 'Proxy',
+      thumbnail: 'Thumbnails',
+      index: 'Index',
+      move: 'Move',
+      copy: 'Copy',
+      archive: 'Archive',
+      custom: 'Custom'
     }
+    return labels[type] || type
   }
-
-  const handleBulkOperation = async (operation) => {
-    if (selectedJobs.length === 0) {
-      toast.error('No jobs selected')
-      return
+  
+  // Format duration for display
+  const formatJobDuration = (job) => {
+    if (job.duration_sec) {
+      return formatDuration(job.duration_sec)
     }
-
-    try {
-      await bulkOperation.mutateAsync({
-        operation,
-        jobIds: selectedJobs
-      })
-      setSelectedJobs([])
-    } catch (error) {
-      toast.error(`Bulk ${operation} failed`)
+    if (job.status === 'running' && job.started_at) {
+      const started = new Date(job.started_at)
+      const now = new Date()
+      const sec = Math.floor((now - started) / 1000)
+      return formatDuration(sec)
     }
+    return '—'
   }
-
-  const handleDeleteJob = async (jobId) => {
-    try {
-      const response = await fetch(`/api/jobs/${jobId}`, {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' }
-      })
-      
-      if (response.ok) {
-        toast.success('Job deleted successfully')
-        // Refresh job list
-        refetchJobs()
-      } else {
-        toast.error('Failed to delete job')
-      }
-    } catch (error) {
-      console.error('Failed to delete job:', error)
-      toast.error('Failed to delete job')
+  
+  // Close menu on outside click
+  useEffect(() => {
+    const handleClickOutside = () => {
+      setActiveMenuId(null)
     }
-  }
-
-  const fetchJobLogs = async (jobId) => {
-    try {
-      const response = await fetch(`/api/jobs/${jobId}/logs`)
-      if (response.ok) {
-        const logs = await response.json()
-        // Handle logs display
-        console.log('Job logs:', logs)
-      }
-    } catch (error) {
-      console.error('Failed to fetch job logs:', error)
+    if (activeMenuId) {
+      document.addEventListener('click', handleClickOutside)
+      return () => document.removeEventListener('click', handleClickOutside)
     }
+  }, [activeMenuId])
+  
+  // Loading state
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <div className="text-center">
+          <Loader2 className="w-8 h-8 animate-spin text-primary mx-auto mb-4" />
+          <p className="text-muted-foreground">Loading jobs...</p>
+        </div>
+      </div>
+    )
   }
-
-  const getJobIcon = (type) => {
-    switch (type) {
-      case 'remux':
-        return RefreshCw
-      case 'proxy':
-        return Play
-      case 'thumbnail':
-        return FileText
-      case 'transcode':
-        return PlayCircle
-      default:
-        return PlayCircle
-    }
+  
+  // Error state
+  if (error) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <div className="text-center">
+          <AlertCircle className="w-12 h-12 text-destructive mx-auto mb-4" />
+          <h3 className="text-lg font-medium mb-2">Couldn't load jobs</h3>
+          <p className="text-muted-foreground mb-4">{error.message}</p>
+          <Button onClick={() => refetch()}>
+            <RefreshCw className="w-4 h-4 mr-2" />
+            Retry
+          </Button>
+        </div>
+      </div>
+    )
   }
-
-  const getStatusIcon = (status) => {
-    switch (status) {
-      case 'completed':
-        return CheckCircle
-      case 'failed':
-        return XCircle
-      case 'running':
-        return Play
-      case 'pending':
-        return Clock
-      case 'cancelled':
-        return Square
-      default:
-        return AlertCircle
-    }
-  }
-
-  const statusOptions = [
-    { value: 'all', label: 'All Status' },
-    { value: 'pending', label: 'Pending' },
-    { value: 'running', label: 'Running' },
-    { value: 'completed', label: 'Completed' },
-    { value: 'failed', label: 'Failed' },
-    { value: 'cancelled', label: 'Cancelled' },
-  ]
-
-  const typeOptions = [
-    { value: 'all', label: 'All Types' },
-    { value: 'remux', label: 'Remux' },
-    { value: 'proxy', label: 'Proxy' },
-    { value: 'thumbnail', label: 'Thumbnail' },
-    { value: 'transcode', label: 'Transcode' },
-    { value: 'index', label: 'Index' },
-  ]
-
-  const sortOptions = [
-    { value: 'created_at', label: 'Created Date' },
-    { value: 'updated_at', label: 'Updated Date' },
-    { value: 'status', label: 'Status' },
-    { value: 'type', label: 'Type' },
-  ]
-
+  
+  const jobs = jobsData?.items || []
+  const total = jobsData?.total || 0
+  const totalPages = Math.ceil(total / perPage)
+  const selectedCount = selected.size
+  const allOnPageSelected = jobs.length > 0 && jobs.every(job => selected.has(job.id))
+  
   return (
     <div className="space-y-6 p-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Jobs</h1>
-          <p className="text-muted-foreground">
-            Monitor and manage processing jobs
-          </p>
-        </div>
-        <div className="flex items-center space-x-2">
-          <Button
-            variant={showHistory ? 'outline' : 'default'}
-            size="sm"
-            onClick={() => setShowHistory(false)}
-          >
-            Active ({totalActive})
-          </Button>
-          <Button
-            variant={showHistory ? 'default' : 'outline'}
-            size="sm"
-            onClick={() => setShowHistory(true)}
-          >
-            History
-          </Button>
-        </div>
+      <div>
+        <h1 className="text-3xl font-bold tracking-tight">Jobs</h1>
+        <p className="text-muted-foreground">
+          Monitor and manage processing queue
+        </p>
       </div>
-
-      {/* Stats Cards */}
+      
+      {/* Queue Paused Banner */}
+      {queuePaused && (
+        <div className="bg-warning/10 border border-warning/20 rounded-lg p-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <Pause className="w-5 h-5 text-warning" />
+            <div>
+              <p className="font-medium">Processing queue is paused</p>
+              <p className="text-sm text-muted-foreground">
+                New jobs will not start until resumed
+              </p>
+            </div>
+          </div>
+          <Button
+            variant="warning"
+            onClick={() => queueActionMutation.mutate('resume')}
+            disabled={queueActionMutation.isPending}
+          >
+            <Play className="w-4 h-4 mr-2" />
+            Resume Queue
+          </Button>
+        </div>
+      )}
+      
+      {/* Summary Cards */}
       <div className="grid gap-4 md:grid-cols-4">
         <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Running Jobs</CardTitle>
-            <Play className="h-4 w-4 text-green-500" />
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">
+              Running
+            </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{runningCount}</div>
-            <p className="text-xs text-muted-foreground">
-              Currently processing
-            </p>
+            <div className="text-2xl font-bold">{summary?.running || 0}</div>
           </CardContent>
         </Card>
-
+        
         <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Queued Jobs</CardTitle>
-            <Clock className="h-4 w-4 text-yellow-500" />
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">
+              Queued
+            </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{queuedCount}</div>
-            <p className="text-xs text-muted-foreground">
-              Waiting to start
-            </p>
+            <div className="text-2xl font-bold">{summary?.queued || 0}</div>
           </CardContent>
         </Card>
-
+        
         <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Completed Today</CardTitle>
-            <CheckCircle className="h-4 w-4 text-green-500" />
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">
+              Completed (24h)
+            </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{jobStats?.completed || 0}</div>
-            <p className="text-xs text-muted-foreground">
-              Successfully finished
-            </p>
+            <div className="text-2xl font-bold text-green-600">
+              {summary?.completed_24h || 0}
+            </div>
           </CardContent>
         </Card>
-
+        
         <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Failed Today</CardTitle>
-            <XCircle className="h-4 w-4 text-red-500" />
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">
+              Failed (24h)
+            </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{jobStats?.failed || 0}</div>
-            <p className="text-xs text-muted-foreground">
-              Requires attention
-            </p>
+            <div className="text-2xl font-bold text-red-600">
+              {summary?.failed_24h || 0}
+            </div>
           </CardContent>
         </Card>
       </div>
-
+      
       {/* Queue Controls */}
-      <Card>
-        <CardContent className="p-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-4">
-              <h3 className="font-medium">Queue Management</h3>
-              <div className="flex items-center space-x-2">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => pauseQueue.mutate()}
-                  loading={pauseQueue.isLoading}
-                >
-                  <PauseCircle className="h-4 w-4 mr-1" />
-                  Pause Queue
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => resumeQueue.mutate()}
-                  loading={resumeQueue.isLoading}
-                >
-                  <PlayCircle className="h-4 w-4 mr-1" />
-                  Resume Queue
-                </Button>
-                <Button
-                  size="sm"
-                  variant="destructive"
-                  onClick={() => {
-                    if (confirm('Clear all pending jobs from the queue?')) {
-                      clearQueue.mutate()
-                    }
-                  }}
-                  loading={clearQueue.isLoading}
-                >
-                  Clear Queue
-                </Button>
-              </div>
-            </div>
-            
+      <div className="flex items-center gap-2">
+        {!queuePaused ? (
+          <Button
+            variant="outline"
+            onClick={() => queueActionMutation.mutate('pause')}
+            disabled={queueActionMutation.isPending}
+          >
+            <Pause className="w-4 h-4 mr-2" />
+            Pause Queue
+          </Button>
+        ) : (
+          <Button
+            variant="primary"
+            onClick={() => queueActionMutation.mutate('resume')}
+            disabled={queueActionMutation.isPending}
+          >
+            <Play className="w-4 h-4 mr-2" />
+            Resume Queue
+          </Button>
+        )}
+        
+        {confirmClearQueue ? (
+          <div className="flex items-center gap-2 px-3 py-2 bg-destructive/10 border border-destructive/20 rounded-lg">
+            <p className="text-sm">Remove all queued jobs?</p>
             <Button
-              variant="outline"
               size="sm"
-              onClick={() => refetchJobs()}
+              variant="destructive"
+              onClick={() => queueActionMutation.mutate('clear')}
+              disabled={queueActionMutation.isPending}
             >
-              <RefreshCw className="h-4 w-4" />
+              Yes, Clear
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setConfirmClearQueue(false)}
+            >
+              Cancel
             </Button>
           </div>
-        </CardContent>
-      </Card>
-
+        ) : (
+          <Button
+            variant="outline"
+            onClick={() => setConfirmClearQueue(true)}
+            disabled={summary?.queued === 0}
+          >
+            <Trash2 className="w-4 h-4 mr-2" />
+            Clear Queued
+          </Button>
+        )}
+        
+        <div className="ml-auto">
+          <Button
+            variant="outline"
+            onClick={() => refetch()}
+          >
+            <RefreshCw className="w-4 h-4 mr-2" />
+            Refresh
+          </Button>
+        </div>
+      </div>
+      
       {/* Filters */}
-      <Card>
-        <CardContent className="p-4">
-          <div className="flex flex-col space-y-4 md:flex-row md:space-y-0 md:space-x-4">
-            <SimpleSelect
-              options={statusOptions}
-              value={jobFilters.status}
-              onValueChange={(value) => handleFilterChange('status', value)}
-              placeholder="Filter by Status"
-            />
-            
-            <SimpleSelect
-              options={typeOptions}
-              value={jobFilters.type}
-              onValueChange={(value) => handleFilterChange('type', value)}
-              placeholder="Filter by Type"
-            />
-            
-            <SimpleSelect
-              options={sortOptions}
-              value={jobFilters.sortBy}
-              onValueChange={(value) => handleFilterChange('sortBy', value)}
-              placeholder="Sort By"
-            />
-          </div>
-
-          {/* Bulk Actions */}
-          {selectedJobs.length > 0 && (
-            <div className="flex items-center justify-between mt-4 p-3 bg-muted rounded-lg">
-              <span className="text-sm font-medium">
-                {selectedJobs.length} job{selectedJobs.length > 1 ? 's' : ''} selected
-              </span>
-              <div className="flex space-x-2">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => handleBulkOperation('cancel')}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => handleBulkOperation('retry')}
-                >
-                  Retry
-                </Button>
-                <Button
-                  size="sm"
-                  variant="destructive"
-                  onClick={() => handleBulkOperation('delete')}
-                >
-                  Delete
-                </Button>
-              </div>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
+      <div className="flex flex-wrap items-center gap-4 p-4 bg-muted/50 rounded-lg">
+        <div className="flex items-center gap-2">
+          <label className="text-sm font-medium">Status:</label>
+          <select
+            value={status}
+            onChange={(e) => updateParams({ status: e.target.value, page: '1' })}
+            className="px-3 py-1.5 border border-input rounded-lg bg-background text-sm"
+          >
+            <option value="all">All status</option>
+            <option value="queued">Queued</option>
+            <option value="running">Running</option>
+            <option value="completed">Completed</option>
+            <option value="failed">Failed</option>
+            <option value="canceled">Canceled</option>
+          </select>
+        </div>
+        
+        <div className="flex items-center gap-2">
+          <label className="text-sm font-medium">Type:</label>
+          <select
+            value={type}
+            onChange={(e) => updateParams({ type: e.target.value, page: '1' })}
+            className="px-3 py-1.5 border border-input rounded-lg bg-background text-sm"
+          >
+            <option value="all">All types</option>
+            <option value="ffmpeg_remux">Remux</option>
+            <option value="ffmpeg_transcode">Transcode</option>
+            <option value="proxy">Proxy</option>
+            <option value="thumbnail">Thumbnails</option>
+            <option value="index">Index</option>
+            <option value="move">Move</option>
+            <option value="copy">Copy</option>
+            <option value="archive">Archive</option>
+            <option value="custom">Custom</option>
+          </select>
+        </div>
+        
+        <div className="flex items-center gap-2">
+          <label className="text-sm font-medium">Sort by:</label>
+          <select
+            value={`${sort}:${order}`}
+            onChange={(e) => {
+              const [newSort, newOrder] = e.target.value.split(':')
+              updateParams({ sort: newSort, order: newOrder, page: '1' })
+            }}
+            className="px-3 py-1.5 border border-input rounded-lg bg-background text-sm"
+          >
+            <option value="created_at:desc">Created (newest)</option>
+            <option value="created_at:asc">Created (oldest)</option>
+            <option value="updated_at:desc">Updated (recent)</option>
+            <option value="updated_at:asc">Updated (oldest)</option>
+            <option value="type:asc">Type (A-Z)</option>
+            <option value="type:desc">Type (Z-A)</option>
+            <option value="state:asc">Status (A-Z)</option>
+            <option value="state:desc">Status (Z-A)</option>
+          </select>
+        </div>
+        
+        {(status !== 'all' || type !== 'all') && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => updateParams({ status: null, type: null, page: '1' })}
+          >
+            <X className="w-4 h-4 mr-1" />
+            Clear Filters
+          </Button>
+        )}
+      </div>
+      
+      {/* Bulk Action Bar */}
+      {selectedCount > 0 && (
+        <BulkActionBar
+          selectedCount={selectedCount}
+          onAction={(action) => {
+            bulkActionMutation.mutate({
+              action,
+              ids: Array.from(selected)
+            })
+          }}
+          onClear={clearSelection}
+        />
+      )}
+      
       {/* Jobs Table */}
       <Card>
-        <CardHeader>
-          <CardTitle>
-            {showHistory ? 'Job History' : 'Active Jobs'}
-          </CardTitle>
-          <CardDescription>
-            {showHistory 
-              ? 'Recently completed and failed jobs' 
-              : 'Currently running and queued jobs'
-            }
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {jobsLoading ? (
-            <TableSkeleton rows={10} columns={7} />
-          ) : !displayData || displayData.length === 0 ? (
-            <TableEmpty
-              icon={PlayCircle}
-              title={showHistory ? 'No job history' : 'No active jobs'}
-              description={showHistory 
-                ? 'Completed jobs will appear here' 
-                : 'Jobs will appear here when they are created'
-              }
-            />
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-12">
-                    <input
-                      type="checkbox"
-                      checked={selectedJobs.length === displayData.length}
-                      onChange={handleSelectAll}
-                      className="rounded border-border"
-                    />
-                  </TableHead>
-                  <TableHead>Job</TableHead>
-                  <TableHead>Asset</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Progress</TableHead>
-                  <TableHead>Duration</TableHead>
-                  <TableHead>Created</TableHead>
-                  <TableHead className="w-12"></TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {displayData.map((job) => {
-                  const JobIcon = getJobIcon(job.type)
-                  const StatusIcon = getStatusIcon(job.status)
-                  const isSelected = selectedJobs.includes(job.id)
-                  const duration = job.completed_at 
-                    ? new Date(job.completed_at) - new Date(job.started_at || job.created_at)
-                    : job.started_at 
-                      ? Date.now() - new Date(job.started_at)
-                      : null
-                  
-                  return (
-                    <TableRow 
+        <CardContent className="p-0">
+          {jobs.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="border-b border-border">
+                  <tr className="text-left">
+                    <th className="p-3">
+                      <button
+                        onClick={() => toggleAllOnPage(!allOnPageSelected)}
+                        className="p-1"
+                      >
+                        {allOnPageSelected ? (
+                          <CheckSquare className="w-4 h-4" />
+                        ) : (
+                          <Square className="w-4 h-4" />
+                        )}
+                      </button>
+                    </th>
+                    <th className="p-3 text-sm font-medium">Job</th>
+                    <th className="p-3 text-sm font-medium">Asset</th>
+                    <th className="p-3 text-sm font-medium">Status</th>
+                    <th className="p-3 text-sm font-medium">Progress</th>
+                    <th className="p-3 text-sm font-medium">Duration</th>
+                    <th className="p-3 text-sm font-medium">Created</th>
+                    <th className="p-3 text-sm font-medium"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {jobs.map((job) => (
+                    <tr 
                       key={job.id}
-                      className={isSelected ? 'bg-muted/50' : ''}
+                      className="border-b border-border hover:bg-muted/50 transition-colors"
                     >
-                      <TableCell>
-                        <input
-                          type="checkbox"
-                          checked={isSelected}
-                          onChange={() => handleSelectJob(job.id)}
-                          className="rounded border-border"
-                        />
-                      </TableCell>
-                      
-                      <TableCell>
-                        <div className="flex items-center space-x-3">
-                          <JobIcon className="h-5 w-5 text-muted-foreground" />
-                          <div>
-                            <p className="font-medium">{job.type}</p>
-                            <p className="text-xs text-muted-foreground">
-                              ID: {job.id ? job.id.slice(0, 8) : 'N/A'}
-                            </p>
+                      <td className="p-3">
+                        <button
+                          onClick={() => toggleSelection(job.id)}
+                          className="p-1"
+                        >
+                          {selected.has(job.id) ? (
+                            <CheckSquare className="w-4 h-4" />
+                          ) : (
+                            <Square className="w-4 h-4" />
+                          )}
+                        </button>
+                      </td>
+                      <td className="p-3">
+                        <div>
+                          <div className="font-medium">
+                            {getJobTypeLabel(job.type)}
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            {job.id.slice(0, 8)}
                           </div>
                         </div>
-                      </TableCell>
-                      
-                      <TableCell>
-                        <div className="min-w-0">
-                          <p className="truncate max-w-48 text-sm">
-                            {job.asset_path || job.asset_id || 'Unknown'}
-                          </p>
-                        </div>
-                      </TableCell>
-                      
-                      <TableCell>
-                        <div className="flex items-center space-x-2">
-                          <StatusIcon className={`h-4 w-4 ${
-                            job.status === 'completed' ? 'text-green-500' :
-                            job.status === 'failed' ? 'text-red-500' :
-                            job.status === 'running' ? 'text-blue-500' :
-                            job.status === 'pending' ? 'text-yellow-500' :
-                            'text-gray-500'
-                          }`} />
-                          <StatusBadge status={job.status} />
-                        </div>
-                      </TableCell>
-                      
-                      <TableCell>
-                        {job.progress !== null && job.progress !== undefined ? (
-                          <div className="flex items-center space-x-2">
-                            <div className="w-20 h-2 bg-muted rounded-full">
-                              <div 
-                                className="h-2 bg-primary rounded-full transition-all" 
+                      </td>
+                      <td className="p-3">
+                        {job.asset_name ? (
+                          <button
+                            onClick={() => navigate(`/assets?id=${job.asset_id}`)}
+                            className="text-primary hover:underline"
+                          >
+                            {job.asset_name}
+                          </button>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </td>
+                      <td className="p-3">
+                        {getStatusBadge(job.status)}
+                      </td>
+                      <td className="p-3">
+                        {job.status === 'running' && job.progress > 0 ? (
+                          <div className="w-32">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="text-sm font-medium">
+                                {Math.round(job.progress)}%
+                              </span>
+                              {job.eta_sec && (
+                                <span className="text-xs text-muted-foreground">
+                                  ETA {formatDuration(job.eta_sec)}
+                                </span>
+                              )}
+                            </div>
+                            <div className="h-2 bg-muted rounded-full overflow-hidden">
+                              <div
+                                className="h-full bg-primary transition-all duration-300"
                                 style={{ width: `${job.progress}%` }}
                               />
                             </div>
-                            <span className="text-xs">{job.progress}%</span>
                           </div>
                         ) : (
-                          <span className="text-xs text-muted-foreground">N/A</span>
+                          <span className="text-muted-foreground">—</span>
                         )}
-                      </TableCell>
-                      
-                      <TableCell className="text-sm text-muted-foreground">
-                        {duration ? formatDuration(Math.floor(duration / 1000)) : 'N/A'}
-                      </TableCell>
-                      
-                      <TableCell className="text-sm text-muted-foreground">
-                        {formatRelativeTime(job.created_at)}
-                      </TableCell>
-                      
-                      <TableCell>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="sm">
-                              <MoreHorizontal className="h-4 w-4" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent 
-                            align="end"
-                            className="w-40 bg-popover border border-border rounded-md shadow-lg p-1"
+                      </td>
+                      <td className="p-3">
+                        <span className="text-sm">
+                          {formatJobDuration(job)}
+                        </span>
+                      </td>
+                      <td className="p-3">
+                        <div className="text-sm">
+                          <div>{formatRelativeTime(job.created_at)}</div>
+                          {job.started_at && (
+                            <div className="text-xs text-muted-foreground">
+                              Started {formatRelativeTime(job.started_at)}
+                            </div>
+                          )}
+                          {job.ended_at && (
+                            <div className="text-xs text-muted-foreground">
+                              Ended {formatRelativeTime(job.ended_at)}
+                            </div>
+                          )}
+                        </div>
+                      </td>
+                      <td className="p-3">
+                        <div className="relative">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setActiveMenuId(activeMenuId === job.id ? null : job.id)
+                            }}
                           >
-                            {(job.status === 'running' || job.status === 'pending') && (
-                              <DropdownMenuItem 
-                                className="px-2 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground rounded cursor-pointer flex items-center"
-                                onClick={() => cancelJob.mutate(job.id)}
+                            <MoreVertical className="w-4 h-4" />
+                          </Button>
+                          {activeMenuId === job.id && (
+                            <div className="absolute right-0 top-10 z-20 w-48 bg-popover border border-border rounded-lg shadow-lg py-1">
+                              <button
+                                className="w-full px-3 py-2 text-sm text-left hover:bg-accent hover:text-accent-foreground"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  setDetailsJobId(job.id)
+                                  setActiveMenuId(null)
+                                }}
                               >
-                                <Square className="h-4 w-4 mr-2" />
-                                Cancel
-                              </DropdownMenuItem>
-                            )}
-                            
-                            {job.status === 'failed' && (
-                              <DropdownMenuItem 
-                                className="px-2 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground rounded cursor-pointer flex items-center"
-                                onClick={() => retryJob.mutate(job.id)}
-                              >
-                                <RotateCcw className="h-4 w-4 mr-2" />
-                                Retry
-                              </DropdownMenuItem>
-                            )}
-                            
-                            <DropdownMenuItem 
-                              className="px-2 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground rounded cursor-pointer flex items-center"
-                              onClick={() => {
-                                // Implement log viewer
-                                setSelectedJob(job);
-                                setShowLogViewer(true);
-                                fetchJobLogs(job.id);
-                                toast.info('Log viewer coming soon')
-                              }}
-                            >
-                              <FileText className="h-4 w-4 mr-2" />
-                              View Logs
-                            </DropdownMenuItem>
-                            
-                            <DropdownMenuSeparator className="h-px bg-border my-1" />
-                            
-                            <DropdownMenuItem 
-                              className="px-2 py-1.5 text-sm hover:bg-destructive hover:text-destructive-foreground rounded cursor-pointer flex items-center"
-                              onClick={() => {
-                                if (window.confirm(`Delete job ${job.id}?`)) {
-                                  handleDeleteJob(job.id);
-                                }
-                              }}
-                            >
-                              <Trash2 className="h-4 w-4 mr-2" />
-                              Delete
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </TableCell>
-                    </TableRow>
-                  )
-                })}
-              </TableBody>
-            </Table>
+                                <Eye className="w-4 h-4 inline mr-2" />
+                                View Details
+                              </button>
+                              {job.status === 'failed' && (
+                                <button
+                                  className="w-full px-3 py-2 text-sm text-left hover:bg-accent hover:text-accent-foreground"
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    retryMutation.mutate(job.id)
+                                    setActiveMenuId(null)
+                                  }}
+                                >
+                                  <RefreshCw className="w-4 h-4 inline mr-2" />
+                                  Retry
+                                </button>
+                              )}
+                              {['queued', 'running'].includes(job.status) && (
+                                <button
+                                  className="w-full px-3 py-2 text-sm text-left hover:bg-accent hover:text-accent-foreground"
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    cancelMutation.mutate(job.id)
+                                    setActiveMenuId(null)
+                                  }}
+                                >
+                                  <X className="w-4 h-4 inline mr-2" />
+                                  Cancel
+                                </button>
+                              )}
+                              {['completed', 'failed', 'canceled'].includes(job.status) && (
+                                <button
+                                  className="w-full px-3 py-2 text-sm text-left hover:bg-accent hover:text-accent-foreground text-destructive"
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    bulkActionMutation.mutate({
+                                      action: 'delete',
+                                      ids: [job.id]
+                                    })
+                                    setActiveMenuId(null)
+                                  }}
+                                >
+                                  <Trash2 className="w-4 h-4 inline mr-2" />
+                                  Delete Record
+                                </button>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="p-12 text-center">
+              <Archive className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+              <h3 className="text-lg font-medium mb-2">No jobs yet</h3>
+              <p className="text-muted-foreground">
+                Jobs will appear here when assets are processed
+              </p>
+            </div>
           )}
         </CardContent>
       </Card>
+      
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between">
+          <div className="text-sm text-muted-foreground">
+            Showing {(page - 1) * perPage + 1} to {Math.min(page * perPage, total)} of {total} jobs
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => updateParams({ page: (page - 1).toString() })}
+              disabled={page === 1}
+            >
+              Previous
+            </Button>
+            <div className="flex items-center gap-1">
+              {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                let pageNum
+                if (totalPages <= 5) {
+                  pageNum = i + 1
+                } else if (page <= 3) {
+                  pageNum = i + 1
+                } else if (page >= totalPages - 2) {
+                  pageNum = totalPages - 4 + i
+                } else {
+                  pageNum = page - 2 + i
+                }
+                
+                return (
+                  <Button
+                    key={pageNum}
+                    variant={pageNum === page ? 'primary' : 'outline'}
+                    size="sm"
+                    onClick={() => updateParams({ page: pageNum.toString() })}
+                  >
+                    {pageNum}
+                  </Button>
+                )
+              })}
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => updateParams({ page: (page + 1).toString() })}
+              disabled={page === totalPages}
+            >
+              Next
+            </Button>
+          </div>
+        </div>
+      )}
+      
+      {/* Job Details Drawer */}
+      {detailsJobId && (
+        <JobDetailsDrawer
+          jobId={detailsJobId}
+          onClose={() => setDetailsJobId(null)}
+          onRetry={(id) => retryMutation.mutate(id)}
+          onCancel={(id) => cancelMutation.mutate(id)}
+        />
+      )}
     </div>
   )
 }
