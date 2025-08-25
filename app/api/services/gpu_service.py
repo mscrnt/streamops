@@ -33,23 +33,26 @@ class GPUService:
             return self._gpu_info
     
     async def _detect_gpu(self) -> Dict[str, Any]:
-        """Detect NVIDIA GPU and capabilities"""
+        """Detect GPU and capabilities (NVIDIA, AMD, Intel)"""
         info = {
             "available": False,
+            "vendor": None,  # nvidia, amd, intel
             "name": None,
             "driver_version": None,
             "cuda_version": None,
+            "rocm_version": None,  # AMD
+            "level_zero": False,  # Intel
             "memory_total": None,
             "memory_free": None,
             "utilization": None,
             "temperature": None,
-            "nvenc_available": False,
-            "nvdec_available": False,
-            "cuda_filters_available": False
+            "hw_encode_available": False,
+            "hw_decode_available": False,
+            "hw_filters_available": False
         }
         
         try:
-            # Check nvidia-smi
+            # Check if nvidia-smi exists and works
             result = await self._run_command([
                 "nvidia-smi",
                 "--query-gpu=name,driver_version,memory.total,memory.free,utilization.gpu,temperature.gpu",
@@ -81,29 +84,40 @@ class GPUService:
             
             # Check FFmpeg capabilities
             if info["available"]:
-                # Check for NVENC encoders
+                # Detect vendor-specific encoders
+                info["vendor"] = "nvidia"
                 encoders_result = await self._run_command(["ffmpeg", "-hide_banner", "-encoders"])
                 if encoders_result and encoders_result[0] == 0:
                     encoders = encoders_result[1]
                     if "h264_nvenc" in encoders or "hevc_nvenc" in encoders:
-                        info["nvenc_available"] = True
+                        info["hw_encode_available"] = True
                         logger.info("NVENC hardware encoding available")
                 
-                # Check for NVDEC decoders
+                # Check for hardware decoders
                 decoders_result = await self._run_command(["ffmpeg", "-hide_banner", "-decoders"])
                 if decoders_result and decoders_result[0] == 0:
                     decoders = decoders_result[1]
                     if "h264_cuvid" in decoders or "hevc_cuvid" in decoders:
-                        info["nvdec_available"] = True
+                        info["hw_decode_available"] = True
                         logger.info("NVDEC hardware decoding available")
                 
-                # Check for CUDA filters
+                # Check for hardware filters
                 filters_result = await self._run_command(["ffmpeg", "-hide_banner", "-filters"])
                 if filters_result and filters_result[0] == 0:
                     filters = filters_result[1]
                     if "scale_cuda" in filters or "yadif_cuda" in filters:
-                        info["cuda_filters_available"] = True
+                        info["hw_filters_available"] = True
                         logger.info("CUDA filters available")
+            else:
+                # Try AMD GPU detection
+                amd_result = await self._detect_amd_gpu()
+                if amd_result["available"]:
+                    info.update(amd_result)
+                else:
+                    # Try Intel GPU detection
+                    intel_result = await self._detect_intel_gpu()
+                    if intel_result["available"]:
+                        info.update(intel_result)
         
         except Exception as e:
             logger.warning(f"GPU detection failed: {e}")
@@ -147,6 +161,52 @@ class GPUService:
             return False  # No GPU or can't check
         
         return utilization < threshold
+    
+    async def _detect_amd_gpu(self) -> Dict[str, Any]:
+        """Detect AMD GPU"""
+        info = {"available": False, "vendor": "amd"}
+        
+        try:
+            # Check for ROCm
+            result = await self._run_command(["rocm-smi", "--showproductname"])
+            if result[0] == 0:
+                info["available"] = True
+                info["name"] = "AMD GPU"
+                logger.info("AMD GPU detected")
+                
+                # Check for AMF/VCE encoders in FFmpeg
+                encoders_result = await self._run_command(["ffmpeg", "-hide_banner", "-encoders"])
+                if encoders_result[0] == 0:
+                    if "h264_amf" in encoders_result[1] or "h264_vaapi" in encoders_result[1]:
+                        info["hw_encode_available"] = True
+                        logger.info("AMD hardware encoding available")
+        except:
+            pass
+        
+        return info
+    
+    async def _detect_intel_gpu(self) -> Dict[str, Any]:
+        """Detect Intel GPU"""
+        info = {"available": False, "vendor": "intel"}
+        
+        try:
+            # Check for Intel GPU via vainfo
+            result = await self._run_command(["vainfo"])
+            if result[0] == 0 and "Intel" in result[1]:
+                info["available"] = True
+                info["name"] = "Intel GPU"
+                logger.info("Intel GPU detected")
+                
+                # Check for QSV encoders in FFmpeg
+                encoders_result = await self._run_command(["ffmpeg", "-hide_banner", "-encoders"])
+                if encoders_result[0] == 0:
+                    if "h264_qsv" in encoders_result[1] or "h264_vaapi" in encoders_result[1]:
+                        info["hw_encode_available"] = True
+                        logger.info("Intel Quick Sync hardware encoding available")
+        except:
+            pass
+        
+        return info
 
 
 # Global instance

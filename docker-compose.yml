@@ -33,7 +33,7 @@ services:
       
       # OBS WebSocket
       - OBS_WS_URL=ws://host.docker.internal:4455
-      - OBS_WS_PASSWORD=RealHardPassword1$$
+      - OBS_WS_PASSWORD=RealHardPassword1$
       
       # Performance settings
       - GPU_GUARD_PCT=40

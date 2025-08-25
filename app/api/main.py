@@ -7,7 +7,7 @@ import os
 import logging
 from pathlib import Path
 
-from app.api.routers import health, config, assets, jobs, rules, overlays, reports, drives, system, wizard, websocket
+from app.api.routers import health, config, assets, jobs, rules, overlays, reports, drives, system, wizard, websocket, settings
 from app.api.db.database import init_db, close_db
 from app.api.services.nats_service import NATSService
 from app.api.services.config_service import ConfigService
@@ -49,7 +49,11 @@ async def lifespan(app: FastAPI):
     gpu_info = await gpu_service.get_gpu_info()
     app.state.gpu = gpu_service
     if gpu_info["available"]:
-        logger.info(f"GPU detected: {gpu_info['name']} - NVENC: {gpu_info['nvenc_available']}, NVDEC: {gpu_info['nvdec_available']}")
+        vendor = gpu_info.get('vendor', 'unknown')
+        name = gpu_info.get('name', 'Unknown GPU')
+        hw_encode = gpu_info.get('hw_encode_available', False)
+        hw_decode = gpu_info.get('hw_decode_available', False)
+        logger.info(f"GPU detected: {name} ({vendor}) - HW Encode: {hw_encode}, HW Decode: {hw_decode}")
     else:
         logger.info("No GPU detected, using CPU for all processing")
     logger.info("GPU service initialized")
@@ -138,6 +142,7 @@ app.include_router(reports.router, prefix="/api/reports", tags=["reports"])
 app.include_router(drives.router, prefix="/api/drives", tags=["drives"])
 app.include_router(system.router, prefix="/api/system", tags=["system"])
 app.include_router(wizard.router, prefix="/api/wizard", tags=["wizard"])
+app.include_router(settings.router, prefix="/api", tags=["settings"])
 
 # Main WebSocket endpoint for UI updates
 import asyncio
