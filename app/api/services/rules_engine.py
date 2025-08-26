@@ -162,6 +162,32 @@ class RulesEngine:
                     executed_at=start_time
                 )
             
+            # Check quiet period
+            if await self._is_in_quiet_period(rule, enriched_data):
+                return RuleExecution(
+                    rule_id=rule.id,
+                    asset_id=test_data.get('asset_id'),
+                    session_id=test_data.get('session_id'),
+                    success=False,
+                    actions_performed=[],
+                    error_message="File is still in quiet period",
+                    execution_time=0.0,
+                    executed_at=start_time
+                )
+            
+            # Check active hours
+            if not await self._is_within_active_hours(rule):
+                return RuleExecution(
+                    rule_id=rule.id,
+                    asset_id=test_data.get('asset_id'),
+                    session_id=test_data.get('session_id'),
+                    success=False,
+                    actions_performed=[],
+                    error_message="Rule is outside active hours",
+                    execution_time=0.0,
+                    executed_at=start_time
+                )
+            
             # Check guardrails
             guardrail_violations = await self._check_guardrails(rule.guardrails)
             if guardrail_violations:
@@ -222,6 +248,16 @@ class RulesEngine:
                 return None
             
             logger.info(f"Rule '{rule.name}' matched for event {event_type}")
+            
+            # Check quiet period
+            if await self._is_in_quiet_period(rule, event_data):
+                logger.info(f"Rule '{rule.name}' is in quiet period, skipping")
+                return None
+            
+            # Check active hours
+            if not await self._is_within_active_hours(rule):
+                logger.info(f"Rule '{rule.name}' is outside active hours, skipping")
+                return None
             
             # Check guardrails before execution
             guardrail_violations = await self._check_guardrails(rule.guardrails)
@@ -350,6 +386,10 @@ class RulesEngine:
                     if await self._is_recording_active():
                         violations.append("Recording is active")
                 
+                elif guardrail.guardrail_type == "pause_if_streaming":
+                    if await self._is_streaming_active():
+                        violations.append("Streaming is active")
+                
                 elif guardrail.guardrail_type == "pause_if_gpu_pct_above":
                     gpu_usage = await self._get_gpu_usage()
                     if gpu_usage > guardrail.threshold:
@@ -368,13 +408,25 @@ class RulesEngine:
     
     async def _execute_rule_actions(self, rule: RuleResponse, event_data: Dict[str, Any],
                                   start_time: datetime) -> RuleExecution:
-        """Execute all actions for a rule"""
+        """Execute all actions for a rule with QP/AH/GR enforcement"""
         executed_actions = []
         
         try:
-            for action in rule.actions:
-                await self._execute_single_action(action, event_data)
-                executed_actions.append(action.action_type)
+            # Check if we should defer execution
+            defer_reason, next_run_at = await self._check_defer_conditions(rule, event_data)
+            
+            if defer_reason:
+                # Queue job as deferred instead of immediate execution
+                for action in rule.actions:
+                    await self._queue_deferred_action(action, event_data, defer_reason, next_run_at)
+                    executed_actions.append(f"{action.action_type} (deferred)")
+                
+                logger.info(f"Rule '{rule.name}' actions deferred: {defer_reason}, next run at {next_run_at}")
+            else:
+                # Execute immediately
+                for action in rule.actions:
+                    await self._execute_single_action(action, event_data)
+                    executed_actions.append(action.action_type)
             
             execution_time = (datetime.utcnow() - start_time).total_seconds()
             self.stats['successful_executions'] += 1
@@ -664,6 +716,196 @@ class RulesEngine:
     
     # Helper methods
     
+    async def _check_defer_conditions(self, rule: RuleResponse, event_data: Dict[str, Any]) -> tuple[Optional[str], Optional[datetime]]:
+        """
+        Check if job should be deferred due to QP/AH/GR.
+        Returns (defer_reason, next_run_at) or (None, None) if should run now.
+        """
+        # Check quiet period
+        quiet_period_sec = getattr(rule, 'quiet_period_sec', 45)
+        if quiet_period_sec > 0:
+            filepath = event_data.get('filepath', event_data.get('path'))
+            if filepath:
+                try:
+                    file_path = Path(filepath)
+                    if file_path.exists():
+                        file_mtime = file_path.stat().st_mtime
+                        current_time = datetime.utcnow().timestamp()
+                        time_since_modification = current_time - file_mtime
+                        
+                        if time_since_modification < quiet_period_sec:
+                            next_run = datetime.fromtimestamp(file_mtime + quiet_period_sec)
+                            return "quiet_period", next_run
+                except Exception as e:
+                    logger.error(f"Error checking quiet period: {e}")
+        
+        # Check active hours
+        active_hours = getattr(rule, 'active_hours', None)
+        if active_hours and getattr(active_hours, 'enabled', False):
+            now = datetime.now()
+            current_time = now.strftime("%H:%M")
+            start_time = getattr(active_hours, 'start', '00:00')
+            end_time = getattr(active_hours, 'end', '23:59')
+            active_days = getattr(active_hours, 'days', [1, 2, 3, 4, 5, 6, 7])
+            current_day = now.isoweekday()
+            
+            # Check if outside active hours
+            is_within_hours = (start_time <= current_time <= end_time) if end_time >= start_time else (current_time >= start_time or current_time <= end_time)
+            is_active_day = current_day in active_days
+            
+            if not (is_within_hours and is_active_day):
+                # Calculate next active window
+                next_run = self._calculate_next_active_window(now, start_time, active_days)
+                return "active_hours", next_run
+        
+        # Check guardrails
+        guardrail_violations = await self._check_guardrails(rule.guardrails if hasattr(rule, 'guardrails') else [])
+        if guardrail_violations:
+            # Use exponential backoff with jitter
+            attempts = event_data.get('attempts', 0)
+            backoff_sec = min(60 * (2 ** attempts), 300)  # 60s, 120s, 240s, max 300s
+            jitter = backoff_sec * 0.1 * (0.5 - __import__('random').random())  # ±10% jitter
+            next_run = datetime.utcnow() + timedelta(seconds=backoff_sec + jitter)
+            return f"guardrails:{','.join(guardrail_violations)}", next_run
+        
+        return None, None
+    
+    def _calculate_next_active_window(self, now: datetime, start_time: str, active_days: List[int]) -> datetime:
+        """Calculate the next active window start time"""
+        start_hour, start_minute = map(int, start_time.split(':'))
+        
+        # Try same day first
+        next_run = now.replace(hour=start_hour, minute=start_minute, second=0, microsecond=0)
+        
+        # If already past start time today, try tomorrow
+        if next_run <= now:
+            next_run += timedelta(days=1)
+        
+        # Find next active day
+        while next_run.isoweekday() not in active_days:
+            next_run += timedelta(days=1)
+        
+        return next_run
+    
+    async def _queue_deferred_action(self, action: RuleAction, context: Dict[str, Any], 
+                                    blocked_reason: str, next_run_at: datetime):
+        """Queue an action as deferred with blocking metadata"""
+        try:
+            db = await get_db()
+            job_id = self._generate_job_id(action.action_type)
+            
+            # Prepare job payload
+            payload = {
+                "action": action.action_type,
+                "params": action.params,
+                "context": context,
+                "rule_id": context.get("rule_id"),
+                "deferred_from": datetime.utcnow().isoformat()
+            }
+            
+            # Insert deferred job
+            await db.execute("""
+                INSERT INTO so_jobs (
+                    id, type, asset_id, payload_json, state, 
+                    deferred, blocked_reason, next_run_at, attempts,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, 'queued', 1, ?, ?, 0, datetime('now'), datetime('now'))
+            """, (
+                job_id,
+                action.action_type,
+                context.get("asset_id"),
+                json.dumps(payload),
+                blocked_reason,
+                next_run_at.isoformat() if next_run_at else None
+            ))
+            await db.commit()
+            
+            logger.info(f"Queued deferred job {job_id}: {blocked_reason}, next run at {next_run_at}")
+            
+            # Publish to deferred queue for monitoring
+            if self.nats:
+                await self.nats.publish("jobs.defer", {
+                    "id": job_id,
+                    "type": action.action_type,
+                    "blocked_reason": blocked_reason,
+                    "next_run_at": next_run_at.isoformat() if next_run_at else None
+                })
+                
+        except Exception as e:
+            logger.error(f"Failed to queue deferred action: {e}")
+            raise RulesExecutionError(f"Failed to defer action: {e}")
+    
+    async def _is_in_quiet_period(self, rule: RuleResponse, event_data: Dict[str, Any]) -> bool:
+        """Check if the file is still in quiet period"""
+        quiet_period_sec = getattr(rule, 'quiet_period_sec', 0)
+        if not quiet_period_sec or quiet_period_sec <= 0:
+            return False
+        
+        # Get file creation/modification time
+        filepath = event_data.get('filepath', event_data.get('path'))
+        if not filepath:
+            return False
+        
+        try:
+            file_path = Path(filepath)
+            if not file_path.exists():
+                return False
+            
+            # Get file modification time
+            file_mtime = file_path.stat().st_mtime
+            current_time = datetime.utcnow().timestamp()
+            
+            # Check if enough time has passed
+            time_since_modification = current_time - file_mtime
+            
+            if time_since_modification < quiet_period_sec:
+                logger.debug(f"File is in quiet period: {time_since_modification:.1f}s < {quiet_period_sec}s")
+                return True
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error checking quiet period: {e}")
+            return False
+    
+    async def _is_within_active_hours(self, rule: RuleResponse) -> bool:
+        """Check if current time is within rule's active hours"""
+        active_hours = getattr(rule, 'active_hours', None)
+        if not active_hours or not getattr(active_hours, 'enabled', False):
+            return True  # No active hours restriction
+        
+        try:
+            now = datetime.now()
+            current_day = now.isoweekday()  # 1=Monday, 7=Sunday
+            
+            # Check if current day is in active days
+            active_days = getattr(active_hours, 'days', [1, 2, 3, 4, 5, 6, 7])
+            if current_day not in active_days:
+                logger.debug(f"Current day {current_day} not in active days {active_days}")
+                return False
+            
+            # Check if current time is within active hours
+            current_time = now.strftime("%H:%M")
+            start_time = getattr(active_hours, 'start', '00:00')
+            end_time = getattr(active_hours, 'end', '23:59')
+            
+            # Handle cases where end time is before start time (spans midnight)
+            if end_time < start_time:
+                # Active hours span midnight
+                is_within = current_time >= start_time or current_time <= end_time
+            else:
+                # Normal case
+                is_within = start_time <= current_time <= end_time
+            
+            if not is_within:
+                logger.debug(f"Current time {current_time} not within active hours {start_time}-{end_time}")
+            
+            return is_within
+            
+        except Exception as e:
+            logger.error(f"Error checking active hours: {e}")
+            return True  # Default to allowing execution on error
+    
     async def _load_active_rules(self) -> List[RuleResponse]:
         """Load all active rules from database"""
         try:
@@ -671,6 +913,7 @@ class RulesEngine:
             async with db.execute(
                 """
                 SELECT id, name, enabled, priority, when_json, do_json, 
+                       quiet_period_sec, active_hours_json,
                        created_at, updated_at
                 FROM so_rules 
                 WHERE enabled = 1 
@@ -684,6 +927,7 @@ class RulesEngine:
                 try:
                     when_data = json.loads(row[4])
                     do_data = json.loads(row[5])
+                    active_hours_data = json.loads(row[7]) if row[7] else None
                     
                     # Convert to Pydantic models
                     conditions = [RuleCondition(**cond) for cond in when_data.get('conditions', [])]
@@ -698,10 +942,12 @@ class RulesEngine:
                         conditions=conditions,
                         actions=actions,
                         guardrails=guardrails,
+                        quiet_period_sec=row[6] or 0,
+                        active_hours=active_hours_data,
                         status=RuleStatus.active,
                         tags=[],
-                        created_at=datetime.fromisoformat(row[6]),
-                        updated_at=datetime.fromisoformat(row[7])
+                        created_at=datetime.fromisoformat(row[8]),
+                        updated_at=datetime.fromisoformat(row[9])
                     )
                     rules.append(rule)
                     
@@ -806,6 +1052,17 @@ class RulesEngine:
             return await self.obs.is_recording()
         except Exception as e:
             logger.error(f"Failed to check recording status: {e}")
+            return False
+    
+    async def _is_streaming_active(self) -> bool:
+        """Check if OBS is currently streaming"""
+        if not self.obs:
+            return False
+        
+        try:
+            return await self.obs.is_streaming()
+        except Exception as e:
+            logger.error(f"Failed to check streaming status: {e}")
             return False
     
     async def _get_cpu_usage(self) -> float:

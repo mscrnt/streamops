@@ -10,8 +10,8 @@ services:
       - "7768:7768"  # NATS Queue
       - "7769:7769"  # Overlay WebSocket
     volumes:
-      # Persistent data volume
-      - streamops-data:/data
+      # Persistent data directory (local folder instead of Docker volume)
+      - ./data:/data
       
       # Hot reload for development (remove in production)
       # Mount only Python source directories to preserve built UI
@@ -58,6 +58,4 @@ services:
       retries: 3
       start_period: 40s
 
-volumes:
-  streamops-data:
-    driver: local
+# Volumes section removed - using local ./data directory instead

@@ -1,206 +1,156 @@
-import { 
-  Shield, 
-  ShieldOff,
-  Wifi, 
-  WifiOff,
-  Video,
-  VideoOff,
-  AlertTriangle,
-  Settings,
-  Activity,
-  Cpu,
-  Zap,
-  PauseCircle,
-  PlayCircle
-} from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
+import { Shield, AlertTriangle, CheckCircle, Cpu, HardDrive, Activity, Radio } from 'lucide-react'
 import { Badge } from '@/components/ui/Badge'
-import Button from '@/components/ui/Button'
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from '@/components/ui/Tooltip'
+import { useApi } from '@/hooks/useApi'
+import { cn } from '@/lib/utils'
 
-export default function GuardrailsStrip({ guardrails, obs, onManageOBS }) {
-  // Determine guardrails status
-  const isGuardrailsActive = guardrails?.active || false
-  const guardrailReason = guardrails?.reason || null
+export default function GuardrailsStrip() {
+  const { api } = useApi()
   
-  // Determine OBS status
-  const isOBSConnected = obs?.connected || false
-  const isRecording = obs?.recording || false
-  const obsVersion = obs?.version || null
+  // Fetch guardrails status
+  const { data: status, isLoading } = useQuery({
+    queryKey: ['guardrails', 'status'],
+    queryFn: async () => {
+      const response = await api.get('/guardrails/')
+      return response.data
+    },
+    refetchInterval: 5000, // Check every 5 seconds
+    staleTime: 2000
+  })
   
-  // Get guardrail icon and color
-  const getGuardrailStatus = () => {
-    if (!isGuardrailsActive) {
-      return {
-        icon: Shield,
-        color: 'text-green-500',
-        bgColor: 'bg-green-500/10',
-        borderColor: 'border-green-500/20',
-        label: 'Guardrails Inactive',
-        description: 'Processing running normally'
-      }
-    }
-    
-    // Parse the reason to determine which guardrail is active
-    if (guardrailReason?.includes('recording')) {
-      return {
-        icon: Video,
-        color: 'text-yellow-500',
-        bgColor: 'bg-yellow-500/10',
-        borderColor: 'border-yellow-500/20',
-        label: 'Recording Guardrail',
-        description: 'Processing paused during recording'
-      }
-    } else if (guardrailReason?.includes('CPU')) {
-      return {
-        icon: Cpu,
-        color: 'text-orange-500',
-        bgColor: 'bg-orange-500/10',
-        borderColor: 'border-orange-500/20',
-        label: 'CPU Guardrail',
-        description: guardrailReason
-      }
-    } else if (guardrailReason?.includes('GPU')) {
-      return {
-        icon: Zap,
-        color: 'text-orange-500',
-        bgColor: 'bg-orange-500/10',
-        borderColor: 'border-orange-500/20',
-        label: 'GPU Guardrail',
-        description: guardrailReason
-      }
-    } else {
-      return {
-        icon: ShieldOff,
-        color: 'text-yellow-500',
-        bgColor: 'bg-yellow-500/10',
-        borderColor: 'border-yellow-500/20',
-        label: 'Guardrail Active',
-        description: guardrailReason || 'Processing temporarily paused'
-      }
-    }
+  if (isLoading || !status) {
+    return (
+      <div className="bg-muted/50 border rounded-lg p-3 animate-pulse">
+        <div className="h-5 bg-muted rounded w-48" />
+      </div>
+    )
   }
   
-  const guardrailStatus = getGuardrailStatus()
-  const GuardrailIcon = guardrailStatus.icon
+  const isActive = status.active
+  const mainReason = status.reasons?.[0]
   
   return (
-    <div className={`flex items-center justify-between p-3 rounded-lg border ${guardrailStatus.borderColor} ${guardrailStatus.bgColor}`}>
-      <div className="flex items-center space-x-4">
-        {/* Guardrails Status */}
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <div className="flex items-center space-x-2">
-                <div className={`p-2 rounded-lg ${guardrailStatus.bgColor}`}>
-                  <GuardrailIcon className={`h-4 w-4 ${guardrailStatus.color}`} />
-                </div>
-                <div>
-                  <p className="text-sm font-medium">{guardrailStatus.label}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {guardrailStatus.description}
-                  </p>
-                </div>
-              </div>
-            </TooltipTrigger>
-            <TooltipContent>
-              <p>Guardrails automatically pause processing to protect system resources</p>
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
-        
-        {/* Divider */}
-        <div className="h-8 w-px bg-border" />
-        
-        {/* OBS Status */}
-        <div className="flex items-center space-x-3">
-          <div className="flex items-center space-x-2">
-            {isOBSConnected ? (
-              <>
-                <Wifi className="h-4 w-4 text-green-500" />
-                <span className="text-sm">OBS Connected</span>
-                {obsVersion && (
-                  <Badge variant="outline" className="text-xs">
-                    v{obsVersion}
-                  </Badge>
-                )}
-              </>
-            ) : (
-              <>
-                <WifiOff className="h-4 w-4 text-muted-foreground" />
-                <span className="text-sm text-muted-foreground">OBS Disconnected</span>
-              </>
-            )}
+    <div className={cn(
+      "border rounded-lg p-3 transition-colors",
+      isActive ? "bg-warning/10 border-warning/30" : "bg-muted/30"
+    )}>
+      <div className="flex items-center justify-between">
+        {/* Left side - Status */}
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            <Shield className={cn(
+              "w-4 h-4",
+              isActive ? "text-warning" : "text-success"
+            )} />
+            <span className="font-medium text-sm">
+              Guardrails
+            </span>
+            <Badge 
+              variant={isActive ? "warning" : "success"}
+              className="text-xs"
+            >
+              {isActive ? "Active" : "Clear"}
+            </Badge>
           </div>
           
-          {isOBSConnected && (
-            <div className="flex items-center space-x-2">
-              {isRecording ? (
-                <>
-                  <div className="flex items-center space-x-1">
-                    <div className="h-2 w-2 bg-red-500 rounded-full animate-pulse" />
-                    <span className="text-sm font-medium text-red-500">Recording</span>
-                  </div>
-                  <Badge variant="destructive" className="text-xs">
-                    LIVE
-                  </Badge>
-                </>
-              ) : (
-                <div className="flex items-center space-x-1">
-                  <VideoOff className="h-4 w-4 text-muted-foreground" />
-                  <span className="text-sm text-muted-foreground">Not Recording</span>
-                </div>
+          {isActive && mainReason && (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <AlertTriangle className="w-3 h-3" />
+              <span>{mainReason}</span>
+              {status.reasons.length > 1 && (
+                <span>+{status.reasons.length - 1} more</span>
               )}
+            </div>
+          )}
+        </div>
+        
+        {/* Right side - Metrics */}
+        <div className="flex items-center gap-4 text-xs">
+          {/* CPU */}
+          <div className="flex items-center gap-1">
+            <Cpu className={cn(
+              "w-3 h-3",
+              status.cpu_percent > (status.thresholds?.cpu_threshold_pct || 70) 
+                ? "text-warning" 
+                : "text-muted-foreground"
+            )} />
+            <span className={cn(
+              status.cpu_percent > (status.thresholds?.cpu_threshold_pct || 70) 
+                ? "text-warning font-medium" 
+                : "text-muted-foreground"
+            )}>
+              {Math.round(status.cpu_percent)}%
+            </span>
+          </div>
+          
+          {/* Memory */}
+          <div className="flex items-center gap-1">
+            <Activity className={cn(
+              "w-3 h-3",
+              status.memory_available_gb < (status.thresholds?.min_memory_gb || 2)
+                ? "text-warning" 
+                : "text-muted-foreground"
+            )} />
+            <span className={cn(
+              status.memory_available_gb < (status.thresholds?.min_memory_gb || 2)
+                ? "text-warning font-medium" 
+                : "text-muted-foreground"
+            )}>
+              {status.memory_available_gb?.toFixed(1)}GB
+            </span>
+          </div>
+          
+          {/* Disk */}
+          <div className="flex items-center gap-1">
+            <HardDrive className={cn(
+              "w-3 h-3",
+              status.disk_free_gb < (status.thresholds?.min_disk_gb || 10)
+                ? "text-warning" 
+                : "text-muted-foreground"
+            )} />
+            <span className={cn(
+              status.disk_free_gb < (status.thresholds?.min_disk_gb || 10)
+                ? "text-warning font-medium" 
+                : "text-muted-foreground"
+            )}>
+              {Math.round(status.disk_free_gb)}GB
+            </span>
+          </div>
+          
+          {/* Recording */}
+          {status.is_recording && (
+            <div className="flex items-center gap-1">
+              <Radio className="w-3 h-3 text-destructive animate-pulse" />
+              <span className="text-destructive font-medium">REC</span>
+            </div>
+          )}
+          
+          {/* Streaming */}
+          {status.is_streaming && (
+            <div className="flex items-center gap-1">
+              <Radio className="w-3 h-3 text-purple-500 animate-pulse" />
+              <span className="text-purple-500 font-medium">LIVE</span>
             </div>
           )}
         </div>
       </div>
       
-      {/* Actions */}
-      <div className="flex items-center space-x-2">
-        {isGuardrailsActive && (
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <div className="flex items-center space-x-1 px-2 py-1 rounded bg-yellow-500/20">
-                  <PauseCircle className="h-3 w-3 text-yellow-500" />
-                  <span className="text-xs font-medium text-yellow-500">
-                    Processing Paused
-                  </span>
-                </div>
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>Jobs will resume when guardrail conditions clear</p>
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-        )}
-        
-        {!isOBSConnected && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={onManageOBS}
-          >
-            <Settings className="h-4 w-4 mr-1" />
-            Connect OBS
-          </Button>
-        )}
-        
-        {isOBSConnected && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onManageOBS}
-          >
-            <Settings className="h-4 w-4" />
-          </Button>
-        )}
-      </div>
+      {/* Expandable details on hover/click */}
+      {isActive && status.reasons.length > 0 && (
+        <details className="mt-2">
+          <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground">
+            View all active guardrails ({status.reasons.length})
+          </summary>
+          <ul className="mt-2 space-y-1 text-xs">
+            {status.reasons.map((reason, i) => (
+              <li key={i} className="flex items-center gap-2">
+                <span className="w-1 h-1 bg-warning rounded-full" />
+                <span className="text-muted-foreground">{reason}</span>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
     </div>
   )
 }

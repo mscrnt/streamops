@@ -278,12 +278,16 @@ export default function Jobs() {
   })
   
   // Get status badge
-  const getStatusBadge = (status) => {
+  const getStatusBadge = (job) => {
+    // Handle both direct status string and job object
+    const status = typeof job === 'string' ? job : (job.deferred ? 'deferred' : job.status)
+    
     const variants = {
       queued: { variant: 'warning', icon: Clock },
       pending: { variant: 'warning', icon: Clock },
       running: { variant: 'info', icon: Activity },
       completed: { variant: 'success', icon: CheckCircle },
+      deferred: { variant: 'outline', icon: Pause },
       failed: { variant: 'destructive', icon: XCircle },
       canceled: { variant: 'secondary', icon: X }
     }
@@ -291,12 +295,35 @@ export default function Jobs() {
     const config = variants[status] || { variant: 'secondary', icon: Info }
     const Icon = config.icon
     
+    // For deferred jobs, show blocking reason tooltip
+    const title = typeof job === 'object' && job.deferred && job.blocked_reason ? 
+      `Deferred: ${job.blocked_reason.replace(/_/g, ' ').replace(':', ': ')}` : 
+      undefined
+    
     return (
-      <Badge variant={config.variant} className="capitalize">
-        <Icon className="w-3 h-3 mr-1" />
+      <Badge 
+        variant={config.variant} 
+        className="capitalize"
+        title={title}
+      >
+        <Icon className={cn("w-3 h-3 mr-1", config.animate && "animate-spin")} />
         {status}
       </Badge>
     )
+  }
+  
+  // Format next run time for deferred jobs
+  const formatNextRun = (nextRunAt) => {
+    if (!nextRunAt) return null
+    const nextRun = new Date(nextRunAt)
+    const now = new Date()
+    const diffMs = nextRun - now
+    
+    if (diffMs <= 0) return 'Now'
+    if (diffMs < 60000) return `${Math.ceil(diffMs / 1000)}s`
+    if (diffMs < 3600000) return `${Math.ceil(diffMs / 60000)}m`
+    if (diffMs < 86400000) return `${Math.ceil(diffMs / 3600000)}h`
+    return formatRelativeTime(nextRunAt)
   }
   
   // Get job type label
@@ -409,7 +436,7 @@ export default function Jobs() {
       )}
       
       {/* Summary Cards */}
-      <div className="grid gap-4 md:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-5">
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
@@ -429,6 +456,19 @@ export default function Jobs() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{summary?.queued || 0}</div>
+          </CardContent>
+        </Card>
+        
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">
+              Deferred
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-muted-foreground">
+              {summary?.deferred || 0}
+            </div>
           </CardContent>
         </Card>
         
@@ -534,6 +574,7 @@ export default function Jobs() {
             <option value="all">All status</option>
             <option value="queued">Queued</option>
             <option value="running">Running</option>
+            <option value="deferred">Deferred</option>
             <option value="completed">Completed</option>
             <option value="failed">Failed</option>
             <option value="canceled">Canceled</option>
@@ -677,7 +718,14 @@ export default function Jobs() {
                         )}
                       </td>
                       <td className="p-3">
-                        {getStatusBadge(job.status)}
+                        <div className="flex items-center gap-2">
+                          {getStatusBadge(job)}
+                          {job.deferred && job.next_run_at && (
+                            <span className="text-xs text-muted-foreground">
+                              in {formatNextRun(job.next_run_at)}
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="p-3">
                         {job.status === 'running' && job.progress > 0 ? (
@@ -748,6 +796,25 @@ export default function Jobs() {
                                 <Eye className="w-4 h-4 inline mr-2" />
                                 View Details
                               </button>
+                              {job.deferred && (
+                                <button
+                                  className="w-full px-3 py-2 text-sm text-left hover:bg-accent hover:text-accent-foreground"
+                                  onClick={async (e) => {
+                                    e.stopPropagation()
+                                    try {
+                                      await api.post(`/jobs/${job.id}/force-run`)
+                                      toast.success('Job forced to run')
+                                      queryClient.invalidateQueries(['jobs'])
+                                    } catch (error) {
+                                      toast.error('Failed to force run job')
+                                    }
+                                    setActiveMenuId(null)
+                                  }}
+                                >
+                                  <Zap className="w-4 h-4 inline mr-2" />
+                                  Force Run Now
+                                </button>
+                              )}
                               {job.status === 'failed' && (
                                 <button
                                   className="w-full px-3 py-2 text-sm text-left hover:bg-accent hover:text-accent-foreground"

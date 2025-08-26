@@ -7,7 +7,7 @@ import os
 import logging
 from pathlib import Path
 
-from app.api.routers import health, config, assets, jobs, rules, overlays, reports, drives, system, wizard, websocket, settings
+from app.api.routers import health, config, assets, jobs, rules, overlays, reports, drives, system, wizard, websocket, settings, guardrails
 from app.api.db.database import init_db, close_db
 from app.api.services.nats_service import NATSService
 from app.api.services.config_service import ConfigService
@@ -79,12 +79,31 @@ async def lifespan(app: FastAPI):
         app.state.obs = None
         logger.info("OBS WebSocket not configured")
     
+    # Initialize guardrails with OBS service
+    logger.info("Initializing guardrails system...")
+    from app.api.routers.guardrails import init_guardrails
+    db = await init_db()  # Get DB connection
+    await init_guardrails(db, app.state.obs if hasattr(app.state, 'obs') else None)
+    logger.info("Guardrails system initialized")
+    
+    # Initialize deferred job scheduler
+    logger.info("Starting deferred job scheduler...")
+    from app.worker.deferred_scheduler import init_scheduler
+    scheduler = await init_scheduler(app.state.nats if hasattr(app.state, 'nats') else None)
+    app.state.scheduler = scheduler
+    logger.info("Deferred job scheduler started")
+    
     logger.info("StreamOps API started successfully")
     
     yield
     
     # Shutdown
     logger.info("Shutting down StreamOps API...")
+    
+    # Stop deferred job scheduler
+    if hasattr(app.state, 'scheduler') and app.state.scheduler:
+        await app.state.scheduler.stop()
+        logger.info("Deferred job scheduler stopped")
     
     # Close OBS connection
     if hasattr(app.state, 'obs') and app.state.obs:
@@ -137,6 +156,7 @@ app.include_router(config.router, prefix="/api/config", tags=["config"])
 app.include_router(assets.router, prefix="/api/assets", tags=["assets"])
 app.include_router(jobs.router, prefix="/api/jobs", tags=["jobs"])
 app.include_router(rules.router, prefix="/api/rules", tags=["rules"])
+app.include_router(guardrails.router, prefix="/api/guardrails", tags=["guardrails"])
 app.include_router(overlays.router, prefix="/api/overlays", tags=["overlays"])
 app.include_router(reports.router, prefix="/api/reports", tags=["reports"])
 app.include_router(drives.router, prefix="/api/drives", tags=["drives"])

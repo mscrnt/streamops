@@ -258,6 +258,16 @@ class OBSService:
                 "streaming": False
             }
     
+    async def is_recording(self) -> bool:
+        """Check if OBS is currently recording"""
+        status = await self.get_status()
+        return status.get("recording", False)
+    
+    async def is_streaming(self) -> bool:
+        """Check if OBS is currently streaming"""
+        status = await self.get_status()
+        return status.get("streaming", False)
+    
     async def get_current_scene(self) -> Optional[str]:
         """Get current OBS scene"""
         if not self.connected or not self.client:

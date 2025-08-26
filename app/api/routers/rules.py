@@ -1,23 +1,119 @@
-from fastapi import APIRouter, HTTPException, Depends, Query, BackgroundTasks
-from typing import Optional, List, Dict, Any
-from datetime import datetime
+from fastapi import APIRouter, HTTPException, Depends, Query, BackgroundTasks, Body
+from fastapi.responses import JSONResponse
+from typing import Optional, List, Dict, Any, Literal
+from datetime import datetime, timedelta, time
+from pydantic import BaseModel, Field, validator
 import uuid
 import json
+import os
+import re
 import logging
+import aiosqlite
+from pathlib import Path
 
-from app.api.schemas.rules import (
-    RuleResponse, RuleCreate, RuleUpdate, RuleListResponse,
-    RuleSearchQuery, RuleExecution, RuleExecutionHistory, 
-    RuleTestRequest, RuleStatus
-)
 from app.api.db.database import get_db
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# Pydantic models for rules API
+class ActiveHours(BaseModel):
+    enabled: bool = True
+    start: str = "00:00"  # HH:MM format
+    end: str = "23:59"    # HH:MM format
+    days: List[int] = [1, 2, 3, 4, 5, 6, 7]  # 1=Mon, 7=Sun
+    
+    @validator('start', 'end')
+    def validate_time_format(cls, v):
+        if not re.match(r'^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$', v):
+            raise ValueError('Time must be in HH:MM format')
+        return v
 
-# Rule presets for wizard and no-code UI
+class RuleTrigger(BaseModel):
+    type: Literal["file_closed", "schedule", "tagged", "manual", "api"]
+    params: Dict[str, Any] = {}
+
+class RuleCondition(BaseModel):
+    field: str
+    op: str  # equals, contains, regex, lt, lte, gte, gt, in, matches
+    value: Any
+
+class RuleAction(BaseModel):
+    type: str
+    params: Dict[str, Any]
+
+class RuleGuardrails(BaseModel):
+    pause_if_recording: bool = True
+    pause_if_gpu_pct_above: Optional[int] = 40
+    pause_if_cpu_pct_above: Optional[int] = 70
+    require_disk_space_gb: Optional[int] = 5
+
+class RuleCreate(BaseModel):
+    name: str
+    enabled: bool = True
+    priority: int = Field(50, ge=1, le=100)
+    trigger: RuleTrigger
+    when: List[RuleCondition] = []
+    quiet_period_sec: int = 45
+    active_hours: Optional[ActiveHours] = None
+    guardrails: Optional[RuleGuardrails] = None
+    do: List[Dict[str, Any]]
+    meta: Dict[str, Any] = {}
+
+class RuleUpdate(BaseModel):
+    name: Optional[str] = None
+    enabled: Optional[bool] = None
+    priority: Optional[int] = None
+    trigger: Optional[RuleTrigger] = None
+    when: Optional[List[RuleCondition]] = None
+    quiet_period_sec: Optional[int] = None
+    active_hours: Optional[ActiveHours] = None
+    guardrails: Optional[RuleGuardrails] = None
+    do: Optional[List[Dict[str, Any]]] = None
+    meta: Optional[Dict[str, Any]] = None
+
+class RuleResponse(BaseModel):
+    id: str
+    name: str
+    enabled: bool
+    priority: int
+    trigger: Dict[str, Any]
+    when: List[Dict[str, Any]]
+    quiet_period_sec: int
+    active_hours: Optional[Dict[str, Any]]
+    guardrails: Dict[str, Any]
+    do: List[Dict[str, Any]]
+    meta: Dict[str, Any]
+    last_triggered: Optional[str]
+    last_error: Optional[str]
+    created_at: str
+    updated_at: str
+
+class RuleListResponse(BaseModel):
+    rules: List[RuleResponse]
+    total: int
+
+class RuleTestRequest(BaseModel):
+    filepath: str
+
+class RuleTestResponse(BaseModel):
+    matched: bool
+    conditions_met: List[str]
+    actions: List[Dict[str, Any]]
+    deferred_until: Optional[str] = None
+    deferred_reason: Optional[str] = None
+
+class PresetResponse(BaseModel):
+    id: str
+    label: str
+    description: str
+    category: str
+    parameters_schema: Dict[str, Any]
+    defaults: Dict[str, Any]
+    enabled: bool = False
+
+# Rule presets
 RULE_PRESETS = [
     {
         "id": "remux_move_proxy",
@@ -31,63 +127,44 @@ RULE_PRESETS = [
                     "type": "string",
                     "enum": ["mov", "mp4"],
                     "default": "mov",
-                    "title": "Output Container",
-                    "description": "Container format for remuxed files"
+                    "title": "Output Container"
                 },
                 "faststart": {
                     "type": "boolean",
                     "default": True,
-                    "title": "Fast Start",
-                    "description": "Enable fast start for web playback"
+                    "title": "Fast Start"
                 },
-                "editing_target": {
+                "editing_folder": {
                     "type": "string",
                     "format": "path",
                     "title": "Editing Folder",
-                    "description": "Target folder for edited files"
+                    "default": "/mnt/drive_f/Editing/{YYYY}/{MM}/{DD}"
                 },
                 "proxy_min_duration_sec": {
                     "type": "integer",
                     "default": 900,
-                    "minimum": 0,
-                    "title": "Minimum Duration for Proxy",
-                    "description": "Only create proxies for files longer than this (seconds)"
+                    "title": "Min Duration for Proxy (seconds)"
                 }
-            },
-            "required": ["editing_target"]
+            }
         },
         "defaults": {
             "container": "mov",
             "faststart": True,
+            "editing_folder": "/mnt/drive_f/Editing/{YYYY}/{MM}/{DD}",
             "proxy_min_duration_sec": 900
         }
     },
     {
-        "id": "generate_thumbs",
+        "id": "generate_thumbnails",
         "label": "Generate Thumbnails & Previews",
-        "description": "Create poster frame, sprite sheet, and hover preview for all videos",
+        "description": "Create poster, sprite sheet, and hover preview for all video files",
         "category": "processing",
         "parameters_schema": {
             "type": "object",
             "properties": {
-                "poster": {
-                    "type": "boolean",
-                    "default": True,
-                    "title": "Poster Frame",
-                    "description": "Generate poster frame thumbnail"
-                },
-                "sprite": {
-                    "type": "boolean",
-                    "default": True,
-                    "title": "Sprite Sheet",
-                    "description": "Generate sprite sheet for timeline scrubbing"
-                },
-                "hover": {
-                    "type": "boolean",
-                    "default": True,
-                    "title": "Hover Preview",
-                    "description": "Generate hover preview video"
-                }
+                "poster": {"type": "boolean", "default": True},
+                "sprite": {"type": "boolean", "default": True},
+                "hover": {"type": "boolean", "default": True}
             }
         },
         "defaults": {
@@ -99,191 +176,333 @@ RULE_PRESETS = [
     {
         "id": "archive_old",
         "label": "Archive Old Recordings",
-        "description": "Move recordings older than specified days to archive storage",
-        "category": "organization",
+        "description": "Move recordings older than 30 days to archive storage",
+        "category": "maintenance",
         "parameters_schema": {
             "type": "object",
             "properties": {
-                "days_old": {
+                "older_than_days": {
                     "type": "integer",
-                    "default": 90,
-                    "minimum": 1,
-                    "title": "Days Old",
-                    "description": "Archive files older than this many days"
+                    "default": 30,
+                    "title": "Archive files older than (days)"
                 },
                 "archive_path": {
                     "type": "string",
                     "format": "path",
-                    "title": "Archive Folder",
-                    "description": "Target folder for archived files"
+                    "default": "/mnt/archive",
+                    "title": "Archive Location"
                 },
-                "delete_after_archive": {
-                    "type": "boolean",
-                    "default": False,
-                    "title": "Delete After Archive",
-                    "description": "Delete original file after archiving"
+                "delete_after_days": {
+                    "type": "integer",
+                    "default": 90,
+                    "title": "Delete from archive after (days)"
                 }
-            },
-            "required": ["archive_path"]
+            }
         },
         "defaults": {
-            "days_old": 90,
-            "delete_after_archive": False
+            "older_than_days": 30,
+            "archive_path": "/mnt/archive",
+            "delete_after_days": 90
         }
     },
     {
-        "id": "transcode_streaming",
-        "label": "Transcode for Streaming",
-        "description": "Create optimized versions for streaming platforms",
-        "category": "export",
+        "id": "transcode_youtube",
+        "label": "Transcode for YouTube",
+        "description": "Create YouTube-optimized versions with H.264 codec at 1080p",
+        "category": "publishing",
         "parameters_schema": {
             "type": "object",
             "properties": {
                 "preset": {
                     "type": "string",
-                    "enum": ["youtube_1080p", "twitch_720p", "twitter_720p"],
+                    "enum": ["youtube_1080p", "youtube_1440p", "youtube_4k"],
                     "default": "youtube_1080p",
-                    "title": "Platform Preset",
-                    "description": "Optimized settings for target platform"
+                    "title": "YouTube Preset"
                 },
-                "bitrate_mbps": {
-                    "type": "number",
-                    "default": 8,
-                    "minimum": 1,
-                    "maximum": 50,
-                    "title": "Bitrate (Mbps)",
-                    "description": "Target bitrate in megabits per second"
+                "output_folder": {
+                    "type": "string",
+                    "format": "path",
+                    "default": "/mnt/drive_f/YouTube/{YYYY}/{MM}",
+                    "title": "Output Folder"
                 }
             }
         },
         "defaults": {
             "preset": "youtube_1080p",
-            "bitrate_mbps": 8
+            "output_folder": "/mnt/drive_f/YouTube/{YYYY}/{MM}"
         }
     }
 ]
 
-
-@router.get("/presets")
-async def get_rule_presets() -> List[Dict[str, Any]]:
-    """Get available rule presets for the wizard and no-code UI"""
-    return RULE_PRESETS
-
-
-@router.post("/compile")
-async def compile_rule(
-    rule_data: Dict[str, Any],
-    simulate: bool = Query(False, description="Simulate rule execution without saving")
-) -> Dict[str, Any]:
-    """Compile UI rule data into internal rule format and optionally simulate"""
-    try:
-        # Validate rule structure
-        if not rule_data.get("name"):
-            raise HTTPException(status_code=400, detail="Rule name is required")
-        
-        if not rule_data.get("conditions") and not rule_data.get("schedule"):
-            raise HTTPException(status_code=400, detail="Rule must have conditions or schedule")
-        
-        if not rule_data.get("actions"):
-            raise HTTPException(status_code=400, detail="Rule must have at least one action")
-        
-        # Compile conditions
-        when_clause = {}
-        if rule_data.get("conditions"):
-            conditions = rule_data["conditions"]
-            
-            # Handle single condition vs multiple
-            if len(conditions) == 1:
-                when_clause = compile_condition(conditions[0])
-            else:
-                # Default to AND for multiple conditions
-                logic = rule_data.get("condition_logic", "all")
-                when_clause = {
-                    logic: [compile_condition(c) for c in conditions]
+# Rule metadata for dropdowns
+RULE_METADATA = {
+    "guardrails": [
+        {
+            "name": "pause_if_recording",
+            "display_name": "Pause if Recording",
+            "params": {}
+        },
+        {
+            "name": "pause_if_streaming", 
+            "display_name": "Pause if Streaming",
+            "params": {}
+        },
+        {
+            "name": "pause_if_cpu_pct_above",
+            "display_name": "Pause if CPU Above %",
+            "params": {
+                "threshold": {
+                    "type": "number",
+                    "default": 70,
+                    "display_name": "CPU Threshold %",
+                    "description": "Pause if CPU usage exceeds this percentage"
                 }
-        
-        # Compile actions
-        do_actions = []
-        for action in rule_data.get("actions", []):
-            do_actions.append(compile_action(action))
-        
-        # Compile guardrails
-        guardrails = rule_data.get("guardrails", {})
-        
-        # Build final rule
-        compiled_rule = {
-            "name": rule_data["name"],
-            "description": rule_data.get("description", ""),
-            "priority": rule_data.get("priority", 100),
-            "when": when_clause,
-            "do": do_actions,
-            "guardrails": guardrails
-        }
-        
-        # Add schedule if present
-        if rule_data.get("schedule"):
-            compiled_rule["schedule"] = rule_data["schedule"]
-        
-        # Simulate if requested
-        if simulate and rule_data.get("test_file"):
-            # Simulate rule execution
-            simulation_result = await simulate_rule_execution(
-                compiled_rule, 
-                rule_data["test_file"]
-            )
-            return {
-                "compiled": compiled_rule,
-                "simulation": simulation_result
             }
-        
-        return {
-            "compiled": compiled_rule,
-            "valid": True
+        },
+        {
+            "name": "pause_if_gpu_pct_above",
+            "display_name": "Pause if GPU Above %",
+            "params": {
+                "threshold": {
+                    "type": "number",
+                    "default": 40,
+                    "display_name": "GPU Threshold %",
+                    "description": "Pause if GPU usage exceeds this percentage"
+                }
+            }
         }
+    ],
+    "fields": [
+        {"key": "file.extension", "label": "File Extension", "type": "string"},
+        {"key": "file.size", "label": "File Size", "type": "number"},
+        {"key": "file.duration_sec", "label": "Duration (seconds)", "type": "number"},
+        {"key": "file.container", "label": "Container Format", "type": "string"},
+        {"key": "file.video_codec", "label": "Video Codec", "type": "string"},
+        {"key": "file.audio_codec", "label": "Audio Codec", "type": "string"},
+        {"key": "file.width", "label": "Video Width", "type": "number"},
+        {"key": "file.height", "label": "Video Height", "type": "number"},
+        {"key": "file.fps", "label": "Frame Rate", "type": "number"},
+        {"key": "path.abs", "label": "File Path", "type": "string"},
+        {"key": "path.glob", "label": "Path Pattern", "type": "string"},
+        {"key": "tags.contains", "label": "Has Tag", "type": "string"},
+        {"key": "older_than_days", "label": "Age (days)", "type": "number"}
+    ],
+    "operators": [
+        {"key": "equals", "label": "Equals", "types": ["string", "number"]},
+        {"key": "contains", "label": "Contains", "types": ["string"]},
+        {"key": "regex", "label": "Matches Regex", "types": ["string"]},
+        {"key": "lt", "label": "Less Than", "types": ["number"]},
+        {"key": "lte", "label": "Less Than or Equal", "types": ["number"]},
+        {"key": "gte", "label": "Greater Than or Equal", "types": ["number"]},
+        {"key": "gt", "label": "Greater Than", "types": ["number"]},
+        {"key": "in", "label": "In List", "types": ["string", "number"]},
+        {"key": "matches", "label": "Matches Pattern", "types": ["string"]}
+    ],
+    "actions": [
+        {
+            "key": "ffmpeg_remux",
+            "label": "Remux",
+            "description": "Change container without re-encoding",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "container": {
+                        "type": "string",
+                        "enum": ["mp4", "mov", "mkv", "webm"],
+                        "default": "mov",
+                        "title": "Container"
+                    },
+                    "faststart": {
+                        "type": "boolean",
+                        "default": True,
+                        "title": "Fast Start (for web)"
+                    }
+                }
+            }
+        },
+        {
+            "key": "move",
+            "label": "Move",
+            "description": "Move file to another location",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "dest": {
+                        "type": "string",
+                        "format": "path",
+                        "title": "Destination",
+                        "description": "Use {YYYY}, {MM}, {DD}, {Game} variables"
+                    }
+                },
+                "required": ["dest"]
+            }
+        },
+        {
+            "key": "copy",
+            "label": "Copy",
+            "description": "Copy file to another location",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "dest": {
+                        "type": "string",
+                        "format": "path",
+                        "title": "Destination",
+                        "description": "Use {YYYY}, {MM}, {DD}, {Game} variables"
+                    }
+                },
+                "required": ["dest"]
+            }
+        },
+        {
+            "key": "proxy",
+            "label": "Create Proxy",
+            "description": "Generate lightweight proxy for editing",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "resolution": {
+                        "type": "string",
+                        "enum": ["720p", "1080p", "1440p"],
+                        "default": "1080p",
+                        "title": "Resolution"
+                    },
+                    "min_duration_sec": {
+                        "type": "integer",
+                        "default": 0,
+                        "title": "Min Duration (seconds)",
+                        "description": "Only create proxy for files longer than this"
+                    }
+                }
+            }
+        },
+        {
+            "key": "thumbnail",
+            "label": "Generate Thumbnails",
+            "description": "Create poster, sprite sheet, and hover preview",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "poster": {"type": "boolean", "default": True, "title": "Poster Image"},
+                    "sprite": {"type": "boolean", "default": True, "title": "Sprite Sheet"},
+                    "hover": {"type": "boolean", "default": True, "title": "Hover Preview"}
+                }
+            }
+        },
+        {
+            "key": "transcode_preset",
+            "label": "Transcode",
+            "description": "Transcode to optimized preset",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "preset": {
+                        "type": "string",
+                        "enum": ["youtube_1080p", "youtube_1440p", "youtube_4k", "tiktok_1080x1920", "twitter_720p"],
+                        "title": "Preset"
+                    }
+                },
+                "required": ["preset"]
+            }
+        },
+        {
+            "key": "tag",
+            "label": "Tag",
+            "description": "Add or remove tags",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "add": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "title": "Add Tags"
+                    },
+                    "remove": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "title": "Remove Tags"
+                    }
+                }
+            }
+        },
+        {
+            "key": "archive",
+            "label": "Archive",
+            "description": "Move to archive storage",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "policy": {
+                        "type": "string",
+                        "enum": ["default", "compress", "cold"],
+                        "default": "default",
+                        "title": "Archive Policy"
+                    },
+                    "delete_after_days": {
+                        "type": "integer",
+                        "title": "Delete After (days)",
+                        "description": "Auto-delete from archive after this many days"
+                    }
+                }
+            }
+        },
+        {
+            "key": "index_asset",
+            "label": "Reindex",
+            "description": "Re-scan and update metadata",
+            "schema": {
+                "type": "object",
+                "properties": {}
+            }
+        }
+    ]
+}
+
+@router.get("/meta")
+async def get_rule_metadata() -> Dict[str, Any]:
+    """Get metadata for rule builder dropdowns"""
+    return RULE_METADATA
+
+@router.get("/presets", response_model=List[PresetResponse])
+async def get_rule_presets(db=Depends(get_db)) -> List[PresetResponse]:
+    """Get available rule presets with their enabled status"""
+    try:
+        # Get all rules to check which presets are enabled
+        cursor = await db.execute("""
+            SELECT meta_json 
+            FROM so_rules 
+            WHERE enabled = 1 AND meta_json IS NOT NULL
+        """)
+        rows = await cursor.fetchall()
         
+        enabled_presets = set()
+        for row in rows:
+            if row[0]:
+                meta = json.loads(row[0])
+                if 'preset_id' in meta:
+                    enabled_presets.add(meta['preset_id'])
+        
+        # Return presets with enabled status
+        presets = []
+        for preset in RULE_PRESETS:
+            presets.append(PresetResponse(
+                **preset,
+                enabled=preset['id'] in enabled_presets
+            ))
+        
+        return presets
     except Exception as e:
-        logger.error(f"Failed to compile rule: {e}")
-        raise HTTPException(status_code=400, detail=f"Failed to compile rule: {str(e)}")
-
-
-def compile_condition(condition: Dict[str, Any]) -> Dict[str, Any]:
-    """Compile a single condition from UI format to internal format"""
-    return {
-        "field": condition["field"],
-        "operator": condition["operator"],
-        "value": condition["value"]
-    }
-
-
-def compile_action(action: Dict[str, Any]) -> Dict[str, Any]:
-    """Compile a single action from UI format to internal format"""
-    return {
-        "action": action["type"],
-        "params": action.get("parameters", {})
-    }
-
-
-async def simulate_rule_execution(rule: Dict[str, Any], test_file: str) -> Dict[str, Any]:
-    """Simulate rule execution on a test file"""
-    # This would actually evaluate conditions and show what actions would be taken
-    return {
-        "would_match": True,
-        "matched_conditions": rule["when"],
-        "planned_actions": rule["do"],
-        "estimated_duration": "2-5 minutes"
-    }
-
+        logger.error(f"Failed to get rule presets: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/", response_model=RuleListResponse)
 async def list_rules(
     page: int = Query(1, ge=1, description="Page number"),
     per_page: int = Query(50, ge=1, le=100, description="Items per page"),
     enabled: Optional[bool] = Query(None, description="Filter by enabled status"),
-    status: Optional[RuleStatus] = Query(None, description="Filter by status"),
-    tags: Optional[List[str]] = Query(None, description="Filter by tags"),
     db=Depends(get_db)
 ) -> RuleListResponse:
-    """List automation rules with filtering and pagination"""
+    """List all rules with pagination"""
     try:
         query = "SELECT * FROM so_rules WHERE 1=1"
         params = []
@@ -291,117 +510,44 @@ async def list_rules(
         if enabled is not None:
             query += " AND enabled = ?"
             params.append(1 if enabled else 0)
-        search = None  # Add search parameter if needed
-        if search:
-            query += " AND (name LIKE ? OR json_extract(when_json, '$') LIKE ?)"
-            search_term = f"%{search}%"
-            params.extend([search_term, search_term])
         
-        query += " ORDER BY priority DESC, created_at DESC"
-        
-        # Get total count
+        # Count total
         count_query = query.replace("SELECT *", "SELECT COUNT(*)", 1)
         cursor = await db.execute(count_query, params)
         total = (await cursor.fetchone())[0]
         
-        # Apply pagination
-        query += " LIMIT ? OFFSET ?"
+        # Get paginated results
+        query += " ORDER BY priority ASC, created_at DESC LIMIT ? OFFSET ?"
         params.extend([per_page, (page - 1) * per_page])
         
         cursor = await db.execute(query, params)
         rows = await cursor.fetchall()
-        rules = [
-            RuleResponse(
-                id=str(uuid.uuid4()),
-                name="Auto Remux Recordings",
-                description="Automatically remux .mp4 recordings to .mov format",
-                priority=100,
-                conditions=[
-                    {
-                        "field": "filepath",
-                        "operator": "ends_with",
-                        "value": ".mp4"
-                    },
-                    {
-                        "field": "asset_type",
-                        "operator": "equals",
-                        "value": "video"
-                    }
-                ],
-                actions=[
-                    {
-                        "action_type": "ffmpeg_remux",
-                        "params": {
-                            "output_format": "mov",
-                            "output_codec": "copy"
-                        }
-                    }
-                ],
-                guardrails=[
-                    {
-                        "guardrail_type": "pause_if_cpu_pct_above",
-                        "threshold": 80
-                    }
-                ],
-                enabled=True,
-                status=RuleStatus.active,
-                tags=["automation", "video"],
-                executions=45,
-                last_executed=datetime.utcnow(),
-                created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow()
-            )
-        ]
         
-        return RuleListResponse(
-            rules=rules,
-            total=len(rules),
-            page=page,
-            per_page=per_page
-        )
+        rules = []
+        for row in rows:
+            rule = {
+                "id": row[0],
+                "name": row[1],
+                "enabled": bool(row[2]),
+                "priority": row[3] or 50,
+                "trigger": json.loads(row[4]) if row[4] else {"type": "manual"},
+                "when": json.loads(row[5]) if row[5] else [],
+                "do": json.loads(row[6]) if row[6] else [],
+                "quiet_period_sec": row[7] if len(row) > 7 and row[7] is not None else 45,
+                "active_hours": json.loads(row[8]) if len(row) > 8 and row[8] else None,
+                "guardrails": json.loads(row[9]) if len(row) > 9 and row[9] else {},
+                "meta": json.loads(row[10]) if len(row) > 10 and row[10] else {},
+                "last_triggered": row[11] if len(row) > 11 else None,
+                "last_error": row[12] if len(row) > 12 else None,
+                "created_at": row[13] if len(row) > 13 else datetime.utcnow().isoformat(),
+                "updated_at": row[14] if len(row) > 14 else datetime.utcnow().isoformat()
+            }
+            rules.append(RuleResponse(**rule))
+        
+        return RuleListResponse(rules=rules, total=total)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch rules: {str(e)}")
-
-
-@router.post("/", response_model=RuleResponse)
-async def create_rule(rule: RuleCreate, db=Depends(get_db)) -> RuleResponse:
-    """Create a new automation rule"""
-    try:
-        rule_id = str(uuid.uuid4())
-        
-        # Validate rule conditions and actions
-        if not rule.conditions or not rule.actions:
-            raise HTTPException(status_code=400, detail="Rule must have at least one condition and one action")
-        
-        # Insert into database
-        now = datetime.utcnow()
-        await db.execute(
-            """INSERT INTO so_rules (id, name, when_json, do_json, priority, enabled, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (rule_id, rule.name, json.dumps(rule.conditions), json.dumps(rule.actions),
-             rule.priority, 1 if rule.enabled else 0, now.isoformat(), now.isoformat())
-        )
-        await db.commit()
-        
-        new_rule = RuleResponse(
-            id=rule_id,
-            name=rule.name,
-            description=rule.description,
-            priority=rule.priority,
-            conditions=rule.conditions,
-            actions=rule.actions,
-            guardrails=rule.guardrails or [],
-            enabled=rule.enabled,
-            status=RuleStatus.active if rule.enabled else RuleStatus.inactive,
-            tags=rule.tags or [],
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow()
-        )
-        
-        return new_rule
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to create rule: {str(e)}")
-
+        logger.error(f"Failed to list rules: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/{rule_id}", response_model=RuleResponse)
 async def get_rule(rule_id: str, db=Depends(get_db)) -> RuleResponse:
@@ -409,422 +555,538 @@ async def get_rule(rule_id: str, db=Depends(get_db)) -> RuleResponse:
     try:
         cursor = await db.execute("SELECT * FROM so_rules WHERE id = ?", (rule_id,))
         row = await cursor.fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail=f"Rule {rule_id} not found")
         
-        return RuleResponse(
-            id=rule_id,
-            name="Sample Rule",
-            description="A sample automation rule",
-            priority=100,
-            conditions=[],
-            actions=[],
-            guardrails=[],
-            enabled=True,
-            status=RuleStatus.active,
-            tags=[],
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow()
-        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Rule not found")
+        
+        rule = {
+            "id": row[0],
+            "name": row[1],
+            "enabled": bool(row[2]),
+            "priority": row[3] or 50,
+            "trigger": json.loads(row[4]) if row[4] else {"type": "manual"},
+            "when": json.loads(row[5]) if row[5] else [],
+            "do": json.loads(row[6]) if row[6] else [],
+            "quiet_period_sec": row[7] if len(row) > 7 and row[7] is not None else 45,
+            "active_hours": json.loads(row[8]) if len(row) > 8 and row[8] else None,
+            "guardrails": json.loads(row[9]) if len(row) > 9 and row[9] else {},
+            "meta": json.loads(row[10]) if len(row) > 10 and row[10] else {},
+            "last_triggered": row[11] if len(row) > 11 else None,
+            "last_error": row[12] if len(row) > 12 else None,
+            "created_at": row[13] if len(row) > 13 else datetime.utcnow().isoformat(),
+            "updated_at": row[14] if len(row) > 14 else datetime.utcnow().isoformat()
+        }
+        
+        return RuleResponse(**rule)
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch rule: {str(e)}")
+        logger.error(f"Failed to get rule: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
+@router.post("/", response_model=RuleResponse)
+async def create_rule(rule: RuleCreate, db=Depends(get_db)) -> RuleResponse:
+    """Create a new rule"""
+    try:
+        rule_id = str(uuid.uuid4())
+        now = datetime.utcnow().isoformat()
+        
+        # Ensure columns exist (migration might not have run)
+        try:
+            await db.execute("""
+                ALTER TABLE so_rules ADD COLUMN quiet_period_sec INTEGER DEFAULT 45
+            """)
+            await db.execute("""
+                ALTER TABLE so_rules ADD COLUMN active_hours_json TEXT
+            """)
+            await db.execute("""
+                ALTER TABLE so_rules ADD COLUMN guardrails_json TEXT
+            """)
+            await db.execute("""
+                ALTER TABLE so_rules ADD COLUMN meta_json TEXT
+            """)
+            await db.execute("""
+                ALTER TABLE so_rules ADD COLUMN last_triggered TIMESTAMP
+            """)
+            await db.execute("""
+                ALTER TABLE so_rules ADD COLUMN last_error TEXT
+            """)
+            await db.commit()
+        except:
+            pass  # Columns already exist
+        
+        # Insert rule
+        await db.execute("""
+            INSERT INTO so_rules (
+                id, name, enabled, priority, trigger_json, conditions_json, 
+                actions_json, quiet_period_sec, active_hours_json, guardrails_json,
+                meta_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            rule_id,
+            rule.name,
+            1 if rule.enabled else 0,
+            rule.priority,
+            json.dumps(rule.trigger.dict()),
+            json.dumps([c.dict() for c in rule.when]),
+            json.dumps(rule.do),
+            rule.quiet_period_sec,
+            json.dumps(rule.active_hours.dict()) if rule.active_hours else None,
+            json.dumps(rule.guardrails.dict()) if rule.guardrails else None,
+            json.dumps(rule.meta),
+            now,
+            now
+        ))
+        await db.commit()
+        
+        return await get_rule(rule_id, db)
+    except Exception as e:
+        logger.error(f"Failed to create rule: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.put("/{rule_id}", response_model=RuleResponse)
-async def update_rule(
-    rule_id: str,
-    rule_update: RuleUpdate,
-    db=Depends(get_db)
-) -> RuleResponse:
-    """Update an automation rule"""
+async def update_rule(rule_id: str, rule: RuleUpdate, db=Depends(get_db)) -> RuleResponse:
+    """Update an existing rule"""
     try:
         # Check if rule exists
         cursor = await db.execute("SELECT * FROM so_rules WHERE id = ?", (rule_id,))
         existing = await cursor.fetchone()
         if not existing:
-            raise HTTPException(status_code=404, detail=f"Rule {rule_id} not found")
+            raise HTTPException(status_code=404, detail="Rule not found")
         
-        # Validate updated conditions and actions
-        if rule_update.conditions is not None and not rule_update.conditions:
-            raise HTTPException(status_code=400, detail="Rule must have at least one condition")
-        if rule_update.actions is not None and not rule_update.actions:
-            raise HTTPException(status_code=400, detail="Rule must have at least one action")
-        
-        updated_rule = RuleResponse(
-            id=rule_id,
-            name=rule_update.name or "Updated Rule",
-            description=rule_update.description,
-            priority=rule_update.priority or 100,
-            conditions=rule_update.conditions or [],
-            actions=rule_update.actions or [],
-            guardrails=rule_update.guardrails or [],
-            enabled=rule_update.enabled if rule_update.enabled is not None else True,
-            status=RuleStatus.active if rule_update.enabled else RuleStatus.inactive,
-            tags=rule_update.tags or [],
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow()
-        )
-        
-        return updated_rule
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to update rule: {str(e)}")
-
-
-@router.delete("/{rule_id}")
-async def delete_rule(rule_id: str, db=Depends(get_db)) -> Dict[str, str]:
-    """Delete an automation rule"""
-    try:
-        await db.execute("DELETE FROM so_rules WHERE id = ?", (rule_id,))
-        await db.commit()
-        return {"message": f"Rule {rule_id} deleted successfully"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to delete rule: {str(e)}")
-
-
-@router.post("/{rule_id}/enable")
-async def enable_rule(rule_id: str, db=Depends(get_db)) -> Dict[str, str]:
-    """Enable a rule"""
-    try:
-        await db.execute("UPDATE so_rules SET enabled = 1 WHERE id = ?", (rule_id,))
-        await db.commit()
-        return {"message": f"Rule {rule_id} enabled"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to enable rule: {str(e)}")
-
-
-@router.post("/{rule_id}/disable")
-async def disable_rule(rule_id: str, db=Depends(get_db)) -> Dict[str, str]:
-    """Disable a rule"""
-    try:
-        await db.execute("UPDATE so_rules SET enabled = 0 WHERE id = ?", (rule_id,))
-        await db.commit()
-        return {"message": f"Rule {rule_id} disabled"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to disable rule: {str(e)}")
-
-
-@router.post("/{rule_id}/test", response_model=RuleExecution)
-async def test_rule(
-    rule_id: str,
-    test_request: RuleTestRequest,
-    db=Depends(get_db)
-) -> RuleExecution:
-    """Test a rule against mock or real data"""
-    try:
-        from app.api.services.rules_engine import RulesEngine
-        from app.api.services.nats_service import NATSService
-        from app.api.services.obs_service import OBSService
-        import time
-        
-        # Initialize services
-        nats_service = NATSService() if os.getenv("NATS_ENABLE", "true").lower() == "true" else None
-        obs_service = OBSService()
-        
-        # Initialize rules engine
-        engine = RulesEngine(
-            nats_service=nats_service,
-            obs_service=obs_service,
-            db=db
-        )
-        
-        # Load rule from database
-        cursor = await db.execute("SELECT * FROM so_rules WHERE id = ?", (rule_id,))
-        rule = await cursor.fetchone()
-        if not rule:
-            raise HTTPException(status_code=404, detail=f"Rule {rule_id} not found")
-        
-        # Parse rule data
-        rule_dict = {
-            'id': rule[0],
-            'name': rule[1],
-            'when': json.loads(rule[4]) if rule[4] else {},
-            'do': json.loads(rule[5]) if rule[5] else []
-        }
-        
-        # Test data - either from request or mock
-        test_data = test_request.test_data or {
-            'filepath': test_request.asset_id or '/test/file.mp4',
-            'asset_id': test_request.asset_id,
-            'event': test_request.event_type or 'file.created'
-        }
-        
-        # Evaluate rule in dry-run mode
-        start_time = time.time()
-        matched = await engine._evaluate_conditions(rule_dict['when'], test_data)
-        execution_time = time.time() - start_time
-        
-        # Determine what actions would be performed
-        actions_to_perform = []
-        if matched:
-            for action in rule_dict['do']:
-                if isinstance(action, dict):
-                    actions_to_perform.append(list(action.keys())[0])
-                else:
-                    actions_to_perform.append(str(action))
-        
-        return RuleExecution(
-            rule_id=rule_id,
-            asset_id=test_request.asset_id,
-            success=matched,
-            actions_performed=actions_to_perform if matched else [],
-            execution_time=execution_time,
-            executed_at=datetime.utcnow()
-        )
-    except Exception as e:
-        logger.error(f"Failed to test rule {rule_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to test rule: {str(e)}")
-
-
-@router.post("/{rule_id}/execute")
-async def execute_rule(
-    rule_id: str,
-    asset_id: Optional[str] = Query(None, description="Asset ID to execute rule against"),
-    background_tasks: BackgroundTasks = BackgroundTasks(),
-    force: bool = Query(False, description="Force execution even if conditions not met"),
-    db=Depends(get_db)
-) -> Dict[str, str]:
-    """Manually execute a rule"""
-    try:
-        # Queue rule execution job via NATS
-        from app.api.services.nats_service import publish_job
-        job_payload = {
-            "rule_id": rule_id,
-            "asset_id": asset_id,
-            "force": force
-        }
-        await publish_job("rules.execute", job_payload)
-        background_tasks.add_task(_execute_rule, rule_id, asset_id, force)
-        
-        return {"message": f"Rule {rule_id} execution queued"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to execute rule: {str(e)}")
-
-
-@router.get("/{rule_id}/history", response_model=RuleExecutionHistory)
-async def get_rule_history(
-    rule_id: str,
-    page: int = Query(1, ge=1, description="Page number"),
-    per_page: int = Query(50, ge=1, le=100, description="Items per page"),
-    success_only: Optional[bool] = Query(None, description="Filter by success status"),
-    db=Depends(get_db)
-) -> RuleExecutionHistory:
-    """Get execution history for a rule"""
-    try:
-        # Query execution history from database
-        query = "SELECT * FROM so_rule_executions WHERE rule_id = ?"
-        params = [rule_id]
-        
-        if success_only is not None:
-            query += " AND success = ?"
-            params.append(1 if success_only else 0)
-        
-        query += " ORDER BY executed_at DESC LIMIT ? OFFSET ?"
-        params.extend([per_page, (page - 1) * per_page])
-        
-        cursor = await db.execute(query, params)
-        rows = await cursor.fetchall()
-        
-        executions = [
-            RuleExecution(
-                rule_id=rule_id,
-                asset_id="asset_123",
-                success=True,
-                actions_performed=["ffmpeg_remux"],
-                execution_time=5.2,
-                executed_at=datetime.utcnow()
-            )
-        ]
-        
-        return RuleExecutionHistory(
-            executions=executions,
-            total=len(executions),
-            page=page,
-            per_page=per_page
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch rule history: {str(e)}")
-
-
-@router.post("/search", response_model=RuleListResponse)
-async def search_rules(
-    query: RuleSearchQuery,
-    page: int = Query(1, ge=1, description="Page number"),
-    per_page: int = Query(50, ge=1, le=100, description="Items per page"),
-    db=Depends(get_db)
-) -> RuleListResponse:
-    """Advanced rule search with multiple filters"""
-    try:
-        # Build search query based on filters
-        search_query = "SELECT * FROM so_rules WHERE 1=1"
+        # Build update query
+        updates = []
         params = []
         
-        if query.search_text:
-            search_query += " AND (name LIKE ? OR json_extract(when_json, '$') LIKE ?)"
-            search_term = f"%{query.search_text}%"
-            params.extend([search_term, search_term])
+        if rule.name is not None:
+            updates.append("name = ?")
+            params.append(rule.name)
+        if rule.enabled is not None:
+            updates.append("enabled = ?")
+            params.append(1 if rule.enabled else 0)
+        if rule.priority is not None:
+            updates.append("priority = ?")
+            params.append(rule.priority)
+        if rule.trigger is not None:
+            updates.append("trigger_json = ?")
+            params.append(json.dumps(rule.trigger.dict()))
+        if rule.when is not None:
+            updates.append("conditions_json = ?")
+            params.append(json.dumps([c.dict() for c in rule.when]))
+        if rule.do is not None:
+            updates.append("actions_json = ?")
+            params.append(json.dumps(rule.do))
+        if rule.quiet_period_sec is not None:
+            updates.append("quiet_period_sec = ?")
+            params.append(rule.quiet_period_sec)
+        if rule.active_hours is not None:
+            updates.append("active_hours_json = ?")
+            params.append(json.dumps(rule.active_hours.dict()) if rule.active_hours else None)
+        if rule.guardrails is not None:
+            updates.append("guardrails_json = ?")
+            params.append(json.dumps(rule.guardrails.dict()) if rule.guardrails else None)
+        if rule.meta is not None:
+            updates.append("meta_json = ?")
+            params.append(json.dumps(rule.meta))
         
-        if query.enabled is not None:
-            search_query += " AND enabled = ?"
-            params.append(1 if query.enabled else 0)
+        updates.append("updated_at = ?")
+        params.append(datetime.utcnow().isoformat())
         
-        if query.tags:
-            for tag in query.tags:
-                search_query += " AND json_extract(tags_json, '$') LIKE ?"
-                params.append(f"%{tag}%")
+        params.append(rule_id)
         
-        search_query += " ORDER BY priority DESC LIMIT ? OFFSET ?"
-        params.extend([per_page, (page - 1) * per_page])
+        await db.execute(f"""
+            UPDATE so_rules SET {', '.join(updates)} WHERE id = ?
+        """, params)
+        await db.commit()
         
-        cursor = await db.execute(search_query, params)
-        rows = await cursor.fetchall()
+        return await get_rule(rule_id, db)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update rule: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/{rule_id}")
+async def delete_rule(rule_id: str, db=Depends(get_db)):
+    """Delete a rule"""
+    try:
+        result = await db.execute("DELETE FROM so_rules WHERE id = ?", (rule_id,))
+        await db.commit()
         
-        rules = []  # Convert rows to RuleResponse objects
+        if result.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Rule not found")
         
-        return RuleListResponse(
-            rules=[],
-            total=0,
-            page=page,
-            per_page=per_page
+        return {"ok": True, "message": "Rule deleted"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete rule: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/{rule_id}/duplicate", response_model=RuleResponse)
+async def duplicate_rule(rule_id: str, db=Depends(get_db)) -> RuleResponse:
+    """Duplicate an existing rule"""
+    try:
+        original = await get_rule(rule_id, db)
+        
+        # Create new rule with same settings but new ID
+        new_rule = RuleCreate(
+            name=f"{original.name} (Copy)",
+            enabled=False,  # Start disabled
+            priority=original.priority,
+            trigger=RuleTrigger(**original.trigger),
+            when=[RuleCondition(**c) for c in original.when],
+            quiet_period_sec=original.quiet_period_sec,
+            active_hours=ActiveHours(**original.active_hours) if original.active_hours else None,
+            guardrails=RuleGuardrails(**original.guardrails) if original.guardrails else None,
+            do=original.do,
+            meta=original.meta
         )
+        
+        return await create_rule(new_rule, db)
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Rule search failed: {str(e)}")
+        logger.error(f"Failed to duplicate rule: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-
-@router.get("/templates/actions")
-async def get_action_templates() -> Dict[str, Any]:
-    """Get available action templates and their parameters"""
+@router.post("/compile")
+async def compile_rule(rule: RuleCreate) -> Dict[str, Any]:
+    """Validate and compile a rule configuration"""
     try:
+        # Validate conditions
+        for condition in rule.when:
+            field_meta = next((f for f in RULE_METADATA['fields'] if f['key'] == condition.field), None)
+            if not field_meta:
+                raise HTTPException(status_code=400, detail=f"Unknown field: {condition.field}")
+            
+            operator_meta = next((o for o in RULE_METADATA['operators'] if o['key'] == condition.op), None)
+            if not operator_meta:
+                raise HTTPException(status_code=400, detail=f"Unknown operator: {condition.op}")
+            
+            if field_meta['type'] not in operator_meta['types']:
+                raise HTTPException(status_code=400, detail=f"Operator {condition.op} not valid for field type {field_meta['type']}")
+        
+        # Validate actions
+        if not rule.do:
+            raise HTTPException(status_code=400, detail="Rule must have at least one action")
+        
+        for action in rule.do:
+            if not action:
+                continue
+            action_type = list(action.keys())[0]
+            action_meta = next((a for a in RULE_METADATA['actions'] if a['key'] == action_type), None)
+            if not action_meta:
+                raise HTTPException(status_code=400, detail=f"Unknown action: {action_type}")
+        
+        # Validate active hours
+        if rule.active_hours and rule.active_hours.enabled:
+            start_time = datetime.strptime(rule.active_hours.start, "%H:%M").time()
+            end_time = datetime.strptime(rule.active_hours.end, "%H:%M").time()
+            
+            if start_time == end_time:
+                raise HTTPException(status_code=400, detail="Active hours window has zero length")
+            
+            if not rule.active_hours.days:
+                raise HTTPException(status_code=400, detail="Active hours must have at least one day selected")
+        
+        # Return normalized rule
         return {
-            "ffmpeg_remux": {
-                "description": "Remux media files using FFmpeg",
-                "parameters": {
-                    "output_format": {"type": "string", "required": True},
-                    "output_codec": {"type": "string", "default": "copy"},
-                    "output_path": {"type": "string", "required": False}
-                }
-            },
-            "move": {
-                "description": "Move files to a different location",
-                "parameters": {
-                    "destination": {"type": "string", "required": True},
-                    "create_dirs": {"type": "boolean", "default": True}
-                }
-            },
-            "copy": {
-                "description": "Copy files to a different location",
-                "parameters": {
-                    "destination": {"type": "string", "required": True},
-                    "overwrite": {"type": "boolean", "default": False}
-                }
-            },
-            "thumbs": {
-                "description": "Generate thumbnails and previews",
-                "parameters": {
-                    "poster_count": {"type": "integer", "default": 1},
-                    "sprite_interval": {"type": "integer", "default": 10}
-                }
-            },
-            "tag": {
-                "description": "Add tags to assets",
-                "parameters": {
-                    "tags": {"type": "array", "required": True}
-                }
-            }
+            "valid": True,
+            "rule": rule.dict(),
+            "message": "Rule is valid and ready to save"
         }
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch action templates: {str(e)}")
+        logger.error(f"Failed to compile rule: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-
-@router.get("/templates/conditions")
-async def get_condition_templates() -> Dict[str, Any]:
-    """Get available condition templates and operators"""
-    try:
-        return {
-            "operators": {
-                "equals": "Exact match",
-                "not_equals": "Not equal to",
-                "contains": "Contains substring",
-                "not_contains": "Does not contain substring",
-                "starts_with": "Starts with string",
-                "ends_with": "Ends with string",
-                "greater_than": "Greater than (numeric)",
-                "less_than": "Less than (numeric)",
-                "regex_match": "Regular expression match",
-                "file_exists": "File exists at path",
-                "has_tag": "Asset has specific tag"
-            },
-            "fields": {
-                "filepath": "Full file path",
-                "filename": "File name only",
-                "asset_type": "Type of asset (video/audio/image)",
-                "file_size": "File size in bytes",
-                "duration": "Media duration in seconds",
-                "codec": "Video/audio codec",
-                "tags": "Asset tags array"
-            }
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch condition templates: {str(e)}")
-
-
-@router.post("/bulk/enable")
-async def bulk_enable_rules(
-    rule_ids: List[str],
+@router.post("/{rule_id}/test", response_model=RuleTestResponse)
+async def test_rule(
+    rule_id: str,
+    request: RuleTestRequest,
     db=Depends(get_db)
-) -> Dict[str, Any]:
-    """Enable multiple rules"""
+) -> RuleTestResponse:
+    """Test a rule against a specific file"""
     try:
-        # Enable multiple rules
-        for rule_id in rule_ids:
-            await db.execute("UPDATE so_rules SET enabled = 1 WHERE id = ?", (rule_id,))
+        rule = await get_rule(rule_id, db)
+        
+        # Get file metadata
+        file_path = Path(request.filepath)
+        if not file_path.exists():
+            raise HTTPException(status_code=404, detail="Test file not found")
+        
+        file_stats = file_path.stat()
+        file_meta = {
+            "file.extension": file_path.suffix,
+            "file.size": file_stats.st_size,
+            "path.abs": str(file_path),
+            "path.glob": str(file_path),
+            # Additional metadata would be extracted from FFmpeg probe in production
+        }
+        
+        # Check conditions
+        conditions_met = []
+        matched = True
+        
+        for condition in rule.when:
+            field_value = file_meta.get(condition['field'])
+            if field_value is None:
+                matched = False
+                continue
+            
+            # Evaluate condition based on operator
+            condition_matched = False
+            if condition['op'] == 'equals':
+                condition_matched = field_value == condition['value']
+            elif condition['op'] == 'contains':
+                condition_matched = condition['value'] in str(field_value)
+            elif condition['op'] == 'gt':
+                condition_matched = float(field_value) > float(condition['value'])
+            elif condition['op'] == 'gte':
+                condition_matched = float(field_value) >= float(condition['value'])
+            elif condition['op'] == 'lt':
+                condition_matched = float(field_value) < float(condition['value'])
+            elif condition['op'] == 'lte':
+                condition_matched = float(field_value) <= float(condition['value'])
+            elif condition['op'] == 'matches':
+                import fnmatch
+                condition_matched = fnmatch.fnmatch(str(field_value), condition['value'])
+            elif condition['op'] == 'regex':
+                condition_matched = bool(re.match(condition['value'], str(field_value)))
+            
+            if condition_matched:
+                conditions_met.append(f"{condition['field']} {condition['op']} {condition['value']}")
+            else:
+                matched = False
+        
+        if not matched:
+            return RuleTestResponse(
+                matched=False,
+                conditions_met=conditions_met,
+                actions=[],
+                deferred_until=None,
+                deferred_reason="Conditions not met"
+            )
+        
+        # Check quiet period
+        now = datetime.utcnow()
+        file_mtime = datetime.fromtimestamp(file_stats.st_mtime)
+        quiet_elapsed = (now - file_mtime).total_seconds()
+        
+        if quiet_elapsed < rule.quiet_period_sec:
+            wait_until = file_mtime + timedelta(seconds=rule.quiet_period_sec)
+            return RuleTestResponse(
+                matched=True,
+                conditions_met=conditions_met,
+                actions=rule.do,
+                deferred_until=wait_until.isoformat(),
+                deferred_reason=f"Quiet period: waiting {rule.quiet_period_sec - quiet_elapsed:.0f} more seconds"
+            )
+        
+        # Check active hours
+        if rule.active_hours and rule.active_hours['enabled']:
+            current_time = datetime.now().time()
+            current_day = datetime.now().isoweekday()
+            
+            start_time = datetime.strptime(rule.active_hours['start'], "%H:%M").time()
+            end_time = datetime.strptime(rule.active_hours['end'], "%H:%M").time()
+            
+            # Check if current day is allowed
+            if current_day not in rule.active_hours['days']:
+                # Find next allowed day
+                next_day = None
+                for i in range(1, 8):
+                    check_day = ((current_day - 1 + i) % 7) + 1
+                    if check_day in rule.active_hours['days']:
+                        next_day = check_day
+                        break
+                
+                if next_day:
+                    days_until = (next_day - current_day) % 7
+                    if days_until == 0:
+                        days_until = 7
+                    next_window = datetime.now() + timedelta(days=days_until)
+                    next_window = next_window.replace(
+                        hour=start_time.hour,
+                        minute=start_time.minute,
+                        second=0,
+                        microsecond=0
+                    )
+                    
+                    return RuleTestResponse(
+                        matched=True,
+                        conditions_met=conditions_met,
+                        actions=rule.do,
+                        deferred_until=next_window.isoformat(),
+                        deferred_reason="Outside active days"
+                    )
+            
+            # Check if current time is in window
+            in_window = False
+            if start_time <= end_time:
+                # Same day window
+                in_window = start_time <= current_time <= end_time
+            else:
+                # Overnight window (e.g., 23:00 to 06:00)
+                in_window = current_time >= start_time or current_time <= end_time
+            
+            if not in_window:
+                # Calculate next window opening
+                if current_time < start_time:
+                    next_window = datetime.now().replace(
+                        hour=start_time.hour,
+                        minute=start_time.minute,
+                        second=0,
+                        microsecond=0
+                    )
+                else:
+                    next_window = (datetime.now() + timedelta(days=1)).replace(
+                        hour=start_time.hour,
+                        minute=start_time.minute,
+                        second=0,
+                        microsecond=0
+                    )
+                
+                return RuleTestResponse(
+                    matched=True,
+                    conditions_met=conditions_met,
+                    actions=rule.do,
+                    deferred_until=next_window.isoformat(),
+                    deferred_reason="Outside active hours"
+                )
+        
+        # Rule would execute immediately
+        return RuleTestResponse(
+            matched=True,
+            conditions_met=conditions_met,
+            actions=rule.do,
+            deferred_until=None,
+            deferred_reason=None
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to test rule: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/{rule_id}/enable")
+async def enable_rule(rule_id: str, db=Depends(get_db)):
+    """Enable a rule"""
+    try:
+        result = await db.execute(
+            "UPDATE so_rules SET enabled = 1, updated_at = ? WHERE id = ?",
+            (datetime.utcnow().isoformat(), rule_id)
+        )
         await db.commit()
         
-        return {
-            "enabled": len(rule_ids),
-            "failed": 0,
-            "rule_ids": rule_ids
-        }
+        if result.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Rule not found")
+        
+        return {"ok": True, "message": "Rule enabled"}
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to bulk enable rules: {str(e)}")
+        logger.error(f"Failed to enable rule: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-
-@router.post("/bulk/disable")
-async def bulk_disable_rules(
-    rule_ids: List[str],
-    db=Depends(get_db)
-) -> Dict[str, Any]:
-    """Disable multiple rules"""
+@router.post("/{rule_id}/disable")
+async def disable_rule(rule_id: str, db=Depends(get_db)):
+    """Disable a rule"""
     try:
-        # Disable multiple rules
-        for rule_id in rule_ids:
-            await db.execute("UPDATE so_rules SET enabled = 0 WHERE id = ?", (rule_id,))
+        result = await db.execute(
+            "UPDATE so_rules SET enabled = 0, updated_at = ? WHERE id = ?",
+            (datetime.utcnow().isoformat(), rule_id)
+        )
         await db.commit()
         
-        return {
-            "disabled": len(rule_ids),
-            "failed": 0,
-            "rule_ids": rule_ids
-        }
+        if result.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Rule not found")
+        
+        return {"ok": True, "message": "Rule disabled"}
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to bulk disable rules: {str(e)}")
+        logger.error(f"Failed to disable rule: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-
-# Background task functions
-async def _execute_rule(rule_id: str, asset_id: Optional[str], force: bool):
-    """Background task to execute rule"""
+@router.post("/from-preset", response_model=RuleResponse)
+async def create_rule_from_preset(
+    preset_id: str = Body(..., embed=True),
+    parameters: Dict[str, Any] = Body({}),
+    quiet_period_sec: int = Body(45),
+    active_hours: Optional[ActiveHours] = Body(None),
+    db=Depends(get_db)
+) -> RuleResponse:
+    """Create and enable a rule from a preset"""
     try:
-        from app.api.db.database import get_db
-        db = await get_db()
+        # Find preset
+        preset = next((p for p in RULE_PRESETS if p['id'] == preset_id), None)
+        if not preset:
+            raise HTTPException(status_code=404, detail="Preset not found")
         
-        # Load rule
-        cursor = await db.execute("SELECT * FROM so_rules WHERE id = ?", (rule_id,))
-        rule = await cursor.fetchone()
+        # Merge parameters with defaults
+        params = {**preset['defaults'], **parameters}
         
-        if rule:
-            # Parse and execute rule actions
-            actions = json.loads(rule[3]) if rule[3] else []
-            for action in actions:
-                logger.info(f"Executing action {action} for rule {rule_id}")
-                # Action execution would be handled by worker
+        # Build rule based on preset
+        trigger = RuleTrigger(type="file_closed")
+        conditions = []
+        actions = []
+        
+        if preset_id == "remux_move_proxy":
+            conditions = [
+                RuleCondition(field="file.extension", op="in", value=[".mkv", ".ts", ".flv"]),
+                RuleCondition(field="path.glob", op="matches", value="/mnt/*/Recordings/**")
+            ]
+            actions = [
+                {"ffmpeg_remux": {"container": params["container"], "faststart": params["faststart"]}},
+                {"move": {"dest": params["editing_folder"]}},
+                {"proxy": {"resolution": "1080p", "min_duration_sec": params["proxy_min_duration_sec"]}}
+            ]
+        elif preset_id == "generate_thumbnails":
+            conditions = [
+                RuleCondition(field="file.extension", op="in", value=[".mp4", ".mov", ".mkv"])
+            ]
+            actions = [
+                {"thumbnail": params}
+            ]
+        elif preset_id == "archive_old":
+            conditions = [
+                RuleCondition(field="older_than_days", op="gt", value=params["older_than_days"])
+            ]
+            actions = [
+                {"archive": {
+                    "policy": "default",
+                    "delete_after_days": params.get("delete_after_days")
+                }}
+            ]
+        elif preset_id == "transcode_youtube":
+            conditions = [
+                RuleCondition(field="file.extension", op="in", value=[".mp4", ".mov", ".mkv"])
+            ]
+            actions = [
+                {"transcode_preset": {"preset": params["preset"]}},
+                {"copy": {"dest": params["output_folder"]}}
+            ]
+        
+        # Create rule
+        rule = RuleCreate(
+            name=preset['label'],
+            enabled=True,
+            priority=50,
+            trigger=trigger,
+            when=conditions,
+            quiet_period_sec=quiet_period_sec,
+            active_hours=active_hours,
+            guardrails=RuleGuardrails(),
+            do=actions,
+            meta={"preset_id": preset_id, "parameters": params}
+        )
+        
+        return await create_rule(rule, db)
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Failed to execute rule {rule_id}: {e}")
+        logger.error(f"Failed to create rule from preset: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

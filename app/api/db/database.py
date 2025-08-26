@@ -54,6 +54,20 @@ async def close_db() -> None:
 async def create_tables() -> None:
     """Create all database tables"""
     
+    # In prototype phase - drop existing tables to ensure clean schema
+    if os.getenv("PROTOTYPE_MODE", "true").lower() == "true":
+        logger.info("Prototype mode: Dropping existing tables for clean schema")
+        tables = [
+            "so_assets_fts",  # Drop FTS table first
+            "so_thumbs", "so_jobs", "so_sessions", "so_rules",
+            "so_overlays", "so_configs", "so_reports", "so_drives", "so_assets"
+        ]
+        for table in tables:
+            try:
+                await _db.execute(f"DROP TABLE IF EXISTS {table}")
+            except Exception as e:
+                logger.debug(f"Could not drop {table}: {e}")
+    
     # Assets table
     await _db.execute("""
         CREATE TABLE IF NOT EXISTS so_assets (
@@ -95,7 +109,7 @@ async def create_tables() -> None:
         )
     """)
     
-    # Jobs table
+    # Jobs table with blocking support for QP/AH/GR
     await _db.execute("""
         CREATE TABLE IF NOT EXISTS so_jobs (
             id TEXT PRIMARY KEY,
@@ -105,21 +119,41 @@ async def create_tables() -> None:
             state TEXT DEFAULT 'queued',
             progress REAL DEFAULT 0,
             error TEXT,
+            started_at TIMESTAMP,
+            ended_at TIMESTAMP,
+            -- New blocking fields for QP/AH/GR support
+            deferred BOOLEAN DEFAULT 0,
+            blocked_reason TEXT,
+            next_run_at TIMESTAMP,
+            attempts INTEGER DEFAULT 0,
+            last_check_at TIMESTAMP,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (asset_id) REFERENCES so_assets(id)
         )
     """)
     
-    # Rules table
+    # Rules table with QP/AH support
     await _db.execute("""
         CREATE TABLE IF NOT EXISTS so_rules (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
+            description TEXT,
             enabled BOOLEAN DEFAULT 1,
             priority INTEGER DEFAULT 50,
-            when_json TEXT NOT NULL,
-            do_json TEXT NOT NULL,
+            -- Legacy columns for compatibility
+            when_json TEXT,
+            do_json TEXT,
+            -- New structure columns
+            trigger_json TEXT,
+            conditions_json TEXT,
+            actions_json TEXT,
+            guardrails_json TEXT,
+            meta_json TEXT,
+            quiet_period_sec INTEGER DEFAULT 45,
+            active_hours_json TEXT,
+            preset_id TEXT,
+            rule_yaml TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
@@ -198,6 +232,8 @@ async def create_tables() -> None:
     await _db.execute("CREATE INDEX IF NOT EXISTS idx_jobs_state ON so_jobs(state)")
     await _db.execute("CREATE INDEX IF NOT EXISTS idx_jobs_type ON so_jobs(type)")
     await _db.execute("CREATE INDEX IF NOT EXISTS idx_jobs_asset ON so_jobs(asset_id)")
+    await _db.execute("CREATE INDEX IF NOT EXISTS idx_jobs_deferred_next_run ON so_jobs(deferred, next_run_at)")
+    await _db.execute("CREATE INDEX IF NOT EXISTS idx_jobs_blocked ON so_jobs(blocked_reason)")
     await _db.execute("CREATE INDEX IF NOT EXISTS idx_rules_enabled ON so_rules(enabled)")
     await _db.execute("CREATE INDEX IF NOT EXISTS idx_rules_priority ON so_rules(priority)")
     

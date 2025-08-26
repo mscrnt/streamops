@@ -40,14 +40,21 @@ class JobItem(BaseModel):
     type: str
     asset_id: Optional[str] = None
     asset_name: Optional[str] = None
-    status: str
+    state: str  # Changed from status to state to match DB
     progress: float = 0.0
     eta_sec: Optional[int] = None
     created_at: str
     started_at: Optional[str] = None
     ended_at: Optional[str] = None
+    updated_at: Optional[str] = None
     duration_sec: Optional[float] = None
     error: Optional[str] = None
+    payload: Optional[Dict[str, Any]] = {}
+    # New blocking fields
+    deferred: bool = False
+    blocked_reason: Optional[str] = None
+    next_run_at: Optional[str] = None
+    attempts: int = 0
 
 class JobListResponse(BaseModel):
     items: List[JobItem]
@@ -62,6 +69,7 @@ class JobDetailResponse(BaseModel):
 class JobSummaryResponse(BaseModel):
     running: int
     queued: int
+    deferred: int
     completed_24h: int
     failed_24h: int
 
@@ -108,7 +116,7 @@ manager = ConnectionManager()
 
 @router.get("/", response_model=JobListResponse)
 async def list_jobs(
-    status: Optional[str] = Query(None, description="Filter by status (all|queued|running|completed|failed|canceled)"),
+    status: Optional[str] = Query(None, description="Filter by status (all|queued|running|completed|failed|canceled|deferred)"),
     type: Optional[str] = Query(None, description="Filter by job type"),
     date_field: str = Query("created_at", description="Date field to filter on"),
     start: Optional[str] = Query(None, description="Start date (ISO8601)"),
@@ -132,8 +140,11 @@ async def list_jobs(
         
         # Apply filters
         if status and status != "all":
-            query += " AND j.state = ?"
-            params.append(status)
+            if status == "deferred":
+                query += " AND j.deferred = 1"
+            else:
+                query += " AND j.state = ?"
+                params.append(status)
         
         if type and type != "all":
             query += " AND j.type = ?"
@@ -196,14 +207,18 @@ async def list_jobs(
                 type=row_dict.get('type', ''),
                 asset_id=row_dict.get('asset_id'),
                 asset_name=os.path.basename(row_dict.get('asset_name', '')) if row_dict.get('asset_name') else None,
-                status=row_dict.get('state', row_dict.get('status', 'unknown')),
+                status='deferred' if row_dict.get('deferred') else row_dict.get('state', row_dict.get('status', 'unknown')),
                 progress=progress * 100 if progress <= 1 else progress,
                 eta_sec=eta_sec,
                 created_at=row_dict.get('created_at', datetime.utcnow().isoformat()),
                 started_at=row_dict.get('started_at'),
                 ended_at=row_dict.get('ended_at'),
                 duration_sec=duration_sec,
-                error=row_dict.get('error')
+                error=row_dict.get('error'),
+                deferred=bool(row_dict.get('deferred', False)),
+                blocked_reason=row_dict.get('blocked_reason'),
+                next_run_at=row_dict.get('next_run_at'),
+                attempts=row_dict.get('attempts', 0)
             ))
         
         return JobListResponse(
@@ -237,7 +252,8 @@ async def get_job_summary(
         cursor = await db.execute("""
             SELECT 
                 SUM(CASE WHEN state = 'running' THEN 1 ELSE 0 END) as running,
-                SUM(CASE WHEN state = 'queued' OR state = 'pending' THEN 1 ELSE 0 END) as queued,
+                SUM(CASE WHEN (state = 'queued' OR state = 'pending') AND deferred = 0 THEN 1 ELSE 0 END) as queued,
+                SUM(CASE WHEN deferred = 1 THEN 1 ELSE 0 END) as deferred,
                 SUM(CASE WHEN state = 'completed' AND updated_at >= ? THEN 1 ELSE 0 END) as completed_24h,
                 SUM(CASE WHEN state = 'failed' AND updated_at >= ? THEN 1 ELSE 0 END) as failed_24h
             FROM so_jobs
@@ -248,11 +264,72 @@ async def get_job_summary(
         return JobSummaryResponse(
             running=row[0] or 0,
             queued=row[1] or 0,
-            completed_24h=row[2] or 0,
-            failed_24h=row[3] or 0
+            deferred=row[2] or 0,
+            completed_24h=row[3] or 0,
+            failed_24h=row[4] or 0
         )
     except Exception as e:
         logger.error(f"Failed to get job summary: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/active", response_model=List[JobItem])
+async def get_active_jobs(
+    limit: int = Query(default=10, le=100),
+    db=Depends(get_db)
+) -> List[JobItem]:
+    """Get currently active (running or queued) jobs"""
+    try:
+        cursor = await db.execute("""
+            SELECT j.*, a.abs_path as asset_name
+            FROM so_jobs j
+            LEFT JOIN so_assets a ON j.asset_id = a.id
+            WHERE j.state IN ('running', 'queued', 'pending')
+               OR (j.deferred = 1 AND j.next_run_at <= datetime('now'))
+            ORDER BY 
+                CASE WHEN j.state = 'running' THEN 1
+                     WHEN j.state = 'pending' THEN 2
+                     WHEN j.state = 'queued' THEN 3
+                     ELSE 4 END,
+                j.created_at DESC
+            LIMIT ?
+        """, (limit,))
+        
+        # Get column names
+        column_names = [description[0] for description in cursor.description]
+        rows = await cursor.fetchall()
+        
+        jobs = []
+        for row in rows:
+            row_dict = dict(zip(column_names, row))
+            job = {
+                "id": row_dict.get('id', ''),
+                "type": row_dict.get('type', ''),
+                "asset_id": row_dict.get('asset_id'),
+                "asset_name": row_dict.get('asset_name'),
+                "state": row_dict.get('state', 'queued'),
+                "progress": row_dict.get('progress', 0),
+                "error": row_dict.get('error'),
+                "deferred": bool(row_dict.get('deferred', 0)),
+                "blocked_reason": row_dict.get('blocked_reason'),
+                "next_run_at": row_dict.get('next_run_at'),
+                "attempts": row_dict.get('attempts', 0),
+                "created_at": row_dict.get('created_at'),
+                "updated_at": row_dict.get('updated_at')
+            }
+            
+            if row_dict.get('payload_json'):
+                try:
+                    job["payload"] = json.loads(row_dict['payload_json'])
+                except:
+                    job["payload"] = {}
+            else:
+                job["payload"] = {}
+            
+            jobs.append(JobItem(**job))
+        
+        return jobs
+    except Exception as e:
+        logger.error(f"Failed to get active jobs: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/{job_id}", response_model=JobDetailResponse)
@@ -367,6 +444,57 @@ async def cancel_job(
         raise
     except Exception as e:
         logger.error(f"Failed to cancel job: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/{job_id}/force-run")
+async def force_run_job(
+    job_id: str,
+    background_tasks: BackgroundTasks,
+    db=Depends(get_db)
+):
+    """Force a deferred job to run immediately, bypassing QP/AH checks (GR still applies)"""
+    try:
+        # Check if job exists and is deferred
+        cursor = await db.execute("""
+            SELECT type, asset_id, payload_json, deferred, blocked_reason
+            FROM so_jobs 
+            WHERE id = ?
+        """, (job_id,))
+        row = await cursor.fetchone()
+        
+        if not row:
+            raise HTTPException(status_code=404, detail="Job not found")
+        
+        if not row[3]:  # Not deferred
+            raise HTTPException(status_code=400, detail="Job is not deferred")
+        
+        # Clear the block and republish
+        await db.execute("""
+            UPDATE so_jobs 
+            SET deferred = 0, blocked_reason = NULL, next_run_at = NULL, 
+                attempts = 0, last_check_at = datetime('now'), updated_at = datetime('now')
+            WHERE id = ?
+        """, (job_id,))
+        await db.commit()
+        
+        # TODO: Republish to the appropriate queue (jobs.<type>)
+        # This would integrate with your NATS service
+        
+        # Broadcast update
+        await manager.broadcast({
+            "type": "job_state",
+            "id": job_id,
+            "status": "queued",
+            "deferred": False,
+            "blocked_reason": None
+        })
+        
+        return {"ok": True, "message": "Job forced to run"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to force run job: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/{job_id}/retry")
