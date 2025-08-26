@@ -7,7 +7,7 @@ import os
 import logging
 from pathlib import Path
 
-from app.api.routers import health, config, assets, jobs, rules, overlays, reports, drives, system, wizard, websocket, settings, guardrails
+from app.api.routers import health, config, assets, jobs, rules, overlays, reports, drives, system, wizard, websocket, settings, guardrails, filesystem
 from app.api.db.database import init_db, close_db
 from app.api.services.nats_service import NATSService
 from app.api.services.config_service import ConfigService
@@ -160,6 +160,7 @@ app.include_router(guardrails.router, prefix="/api/guardrails", tags=["guardrail
 app.include_router(overlays.router, prefix="/api/overlays", tags=["overlays"])
 app.include_router(reports.router, prefix="/api/reports", tags=["reports"])
 app.include_router(drives.router, prefix="/api/drives", tags=["drives"])
+app.include_router(filesystem.router, prefix="/api/fs", tags=["filesystem"])
 app.include_router(system.router, prefix="/api/system", tags=["system"])
 app.include_router(wizard.router, prefix="/api/wizard", tags=["wizard"])
 app.include_router(settings.router, prefix="/api", tags=["settings"])

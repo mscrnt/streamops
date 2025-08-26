@@ -19,17 +19,38 @@ services:
       - ./app/worker:/opt/streamops/app/worker:ro
       - ./app/overlay:/opt/streamops/app/overlay:ro
       
-      # Map your drives here
-      # StreamOps recordings folder
-      - /mnt/d/streamops:/mnt/recordings
+      # Configurable drive mounts (up to 3 roots)
+      # Mount 1 - Primary drive
+      - ${SO_MOUNT_1_HOST:-/mnt/d}:${SO_MOUNT_1_PATH:-/mnt/drive_d}:rw
       
-      # Full D: drive access (for browsing)
-      - /mnt/d:/mnt/drive_d
+      # Mount 2 - Optional secondary drive (remove if not needed)
+      # - ${SO_MOUNT_2_HOST:-/mnt/e}:${SO_MOUNT_2_PATH:-/mnt/drive_e}:rw
+      
+      # Mount 3 - Optional third drive (remove if not needed)
+      # - ${SO_MOUNT_3_HOST:-/mnt/f}:${SO_MOUNT_3_PATH:-/mnt/drive_f}:rw
       
     environment:
       - ROLE=all
       - NATS_ENABLE=true
       - LOG_LEVEL=debug
+      
+      # Mount configuration
+      - SO_MOUNT_1_PATH=${SO_MOUNT_1_PATH:-/mnt/drive_d}
+      - SO_MOUNT_1_LABEL=${SO_MOUNT_1_LABEL:-Drive D}
+      - SO_MOUNT_1_WATCH=${SO_MOUNT_1_WATCH:-true}
+      
+      - SO_MOUNT_2_PATH=${SO_MOUNT_2_PATH:-/mnt/drive_e}
+      - SO_MOUNT_2_LABEL=${SO_MOUNT_2_LABEL:-Drive E}
+      - SO_MOUNT_2_WATCH=${SO_MOUNT_2_WATCH:-false}
+      
+      - SO_MOUNT_3_PATH=${SO_MOUNT_3_PATH:-/mnt/drive_f}
+      - SO_MOUNT_3_LABEL=${SO_MOUNT_3_LABEL:-Drive F}
+      - SO_MOUNT_3_WATCH=${SO_MOUNT_3_WATCH:-false}
+      
+      # Optional convenience role paths
+      - SO_REC_PATH=${SO_REC_PATH:-}
+      - SO_EDIT_PATH=${SO_EDIT_PATH:-}
+      - SO_ARCHIVE_PATH=${SO_ARCHIVE_PATH:-}
       
       # OBS WebSocket
       - OBS_WS_URL=ws://host.docker.internal:4455

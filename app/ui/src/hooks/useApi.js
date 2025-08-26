@@ -15,10 +15,12 @@ const api = axios.create({
 // Request interceptor
 api.interceptors.request.use(
   (config) => {
+    console.log('[API] Request:', config.method?.toUpperCase(), config.url)
     // Add any auth headers here if needed
     return config
   },
   (error) => {
+    console.error('[API] Request error:', error)
     return Promise.reject(error)
   }
 )
@@ -26,9 +28,11 @@ api.interceptors.request.use(
 // Response interceptor
 api.interceptors.response.use(
   (response) => {
+    console.log('[API] Response:', response.config.method?.toUpperCase(), response.config.url, '- Status:', response.status)
     return response
   },
   (error) => {
+    console.error('[API] Response error:', error.config?.url, error.response?.status, error.message)
     const { setOnlineStatus } = useStore.getState()
     
     // Handle network errors

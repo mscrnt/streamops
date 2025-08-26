@@ -225,6 +225,20 @@ async def create_tables() -> None:
         )
     """)
     
+    # Roles table for drive role assignments
+    await _db.execute("""
+        CREATE TABLE IF NOT EXISTS so_roles (
+            role TEXT PRIMARY KEY,
+            drive_id TEXT,
+            subpath TEXT,
+            abs_path TEXT,
+            watch BOOLEAN DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (drive_id) REFERENCES so_drives(id)
+        )
+    """)
+    
     # Create indexes
     await _db.execute("CREATE INDEX IF NOT EXISTS idx_assets_path ON so_assets(abs_path)")
     await _db.execute("CREATE INDEX IF NOT EXISTS idx_assets_status ON so_assets(status)")

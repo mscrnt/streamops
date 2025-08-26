@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { 
@@ -166,12 +166,12 @@ export default function Wizard() {
     }
   }
   
-  const handleStepData = (stepId, data) => {
+  const handleStepData = useCallback((stepId, data) => {
     setWizardData(prev => ({
       ...prev,
       [stepId]: data
     }))
-  }
+  }, [])
   
   const handleSkip = () => {
     handleNext()

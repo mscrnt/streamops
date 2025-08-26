@@ -181,6 +181,11 @@ async def load_guardrails_config(db):
     """Load guardrails config from database"""
     global _guardrails_config
     
+    # Use defaults if no db connection
+    if not db:
+        logger.debug("No database connection, using default guardrails config")
+        return
+    
     try:
         cursor = await db.execute(
             "SELECT value FROM so_configs WHERE key = 'guardrails.config'"
@@ -191,8 +196,11 @@ async def load_guardrails_config(db):
             config_dict = json.loads(row[0])
             _guardrails_config = GuardrailConfig(**config_dict)
             logger.info(f"Loaded guardrails config: {config_dict}")
+        else:
+            logger.debug("No guardrails config in database, using defaults")
     except Exception as e:
-        logger.warning(f"Failed to load guardrails config, using defaults: {e}")
+        # This is expected on first run when config doesn't exist yet
+        logger.debug(f"Guardrails config not found in database, using defaults: {e}")
 
 # This would be called during app startup
 async def init_guardrails(db, obs_service=None):

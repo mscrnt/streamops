@@ -98,7 +98,9 @@ RUN chmod +x /etc/services.d/*/run /etc/cont-init.d/* 2>/dev/null || true
 COPY --from=ui-builder /build/app/ui/dist ./app/static
 
 # Create necessary directories
-RUN mkdir -p /data/db /data/logs /data/cache /data/thumbs /data/config
+RUN mkdir -p /data/db /data/logs /data/cache /data/thumbs /data/config \
+    && mkdir -p /var/lib/streamops/nats /var/log/streamops \
+    && chmod 755 /var/lib/streamops /var/log/streamops
 
 # Environment variables
 ENV PYTHONPATH=/opt/streamops \

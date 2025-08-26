@@ -3,11 +3,16 @@
 
 echo "Initializing StreamOps..."
 
-# Create necessary directories
-mkdir -p /data/db /data/logs /data/cache /data/thumbs /data/config /data/nats
+# Create necessary directories for data persistence
+mkdir -p /data/db /data/logs /data/cache /data/thumbs /data/config
+
+# Create NATS directories in container-only location (not on mounted drives)
+mkdir -p /var/lib/streamops/nats /var/log/streamops
 
 # Set permissions
 chmod -R 755 /data
+chmod -R 755 /var/lib/streamops
+chmod -R 755 /var/log/streamops
 
 # Create default config if not exists
 if [ ! -f /data/config/config.json ]; then

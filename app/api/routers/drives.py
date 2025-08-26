@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, Depends, Query, BackgroundTasks
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Literal
 from datetime import datetime
+from pydantic import BaseModel, Field
 import uuid
 import os
 import json
@@ -19,6 +20,28 @@ import aiofiles
 import psutil
 
 router = APIRouter()
+
+# Role types
+RoleType = Literal["recording", "editing", "archive", "backlog", "assets"]
+
+class AssignRoleRequest(BaseModel):
+    role: RoleType
+    root_id: str  # Drive ID
+    subpath: str = ""  # Relative path within drive
+    watch: bool = True
+
+class RoleAssignment(BaseModel):
+    role: RoleType
+    drive_id: str
+    drive_label: str
+    subpath: str
+    abs_path: str
+    watch: bool
+    exists: bool
+    writable: bool
+
+class RolesResponse(BaseModel):
+    roles: Dict[str, Optional[RoleAssignment]]
 
 
 @router.get("/", response_model=DriveListResponse)
@@ -297,6 +320,323 @@ async def get_drives_status(db=Depends(get_db)) -> List[Dict[str, Any]]:
     except Exception as e:
         logger.error(f"Failed to get drives status: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get drives status: {str(e)}")
+
+
+@router.get("/discovered")
+async def get_discovered_drives(db=Depends(get_db)) -> List[Dict[str, Any]]:
+    """Get all mounted drives from environment and database"""
+    try:
+        drives = []
+        
+        # Get drives from database
+        cursor = await db.execute("""
+            SELECT id, path, label, enabled, config_json, stats_json
+            FROM so_drives
+            ORDER BY label
+        """)
+        rows = await cursor.fetchall()
+        
+        for row in rows:
+            drive_id, path, label, enabled, config, stats = row
+            
+            # Check drive status
+            online = os.path.exists(path)
+            access = "read-write"
+            free = 0
+            total = 0
+            
+            if online:
+                try:
+                    # Check access
+                    if not os.access(path, os.W_OK):
+                        access = "read-only"
+                    
+                    # Get disk usage
+                    import shutil
+                    total, used, free = shutil.disk_usage(path)
+                except:
+                    access = "error"
+            
+            drives.append({
+                "id": drive_id,
+                "path": path,
+                "label": label or path,
+                "enabled": bool(enabled),
+                "online": online,
+                "access": access,
+                "free": free,
+                "total": total,
+                "config": json.loads(config) if config else {},
+                "stats": json.loads(stats) if stats else {}
+            })
+        
+        # Add drives from environment that aren't in DB
+        env_drives = discover_env_drives()
+        for env_drive in env_drives:
+            if not any(d["path"] == env_drive["path"] for d in drives):
+                drives.append(env_drive)
+        
+        return drives
+        
+    except Exception as e:
+        logger.error(f"Failed to get discovered drives: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def discover_env_drives() -> List[Dict[str, Any]]:
+    """Discover drives from environment variables"""
+    drives = []
+    
+    # Check for SO_MOUNT_N environment variables
+    for i in range(1, 10):  # Check up to 10 mount points
+        host_path = os.getenv(f"SO_MOUNT_{i}_HOST")
+        container_path = os.getenv(f"SO_MOUNT_{i}_PATH")
+        label = os.getenv(f"SO_MOUNT_{i}_LABEL", f"Mount {i}")
+        watch = os.getenv(f"SO_MOUNT_{i}_WATCH", "false").lower() == "true"
+        
+        if container_path and os.path.exists(container_path):
+            # Check drive status
+            online = True
+            access = "read-write"
+            free = 0
+            total = 0
+            
+            try:
+                if not os.access(container_path, os.W_OK):
+                    access = "read-only"
+                
+                import shutil
+                total, used, free = shutil.disk_usage(container_path)
+            except:
+                access = "error"
+            
+            drives.append({
+                "id": f"env_mount_{i}",
+                "path": container_path,
+                "label": label,
+                "enabled": True,
+                "online": online,
+                "access": access,
+                "free": free,
+                "total": total,
+                "config": {"watch": watch, "from_env": True},
+                "stats": {}
+            })
+    
+    # Check for convenience role roots
+    role_paths = {
+        "recording": os.getenv("SO_REC_PATH"),
+        "editing": os.getenv("SO_EDIT_PATH"),
+        "archive": os.getenv("SO_ARCHIVE_PATH")
+    }
+    
+    for role, path in role_paths.items():
+        if path and os.path.exists(path):
+            online = True
+            access = "read-write"
+            free = 0
+            total = 0
+            
+            try:
+                if not os.access(path, os.W_OK):
+                    access = "read-only"
+                
+                import shutil
+                total, used, free = shutil.disk_usage(path)
+            except:
+                access = "error"
+            
+            drives.append({
+                "id": f"role_{role}",
+                "path": path,
+                "label": f"{role.title()} Folder",
+                "enabled": True,
+                "online": online,
+                "access": access,
+                "free": free,
+                "total": total,
+                "config": {"role": role, "from_env": True},
+                "stats": {}
+            })
+    
+    return drives
+
+
+@router.post("/assign-role", response_model=RoleAssignment)
+async def assign_role(
+    request: AssignRoleRequest,
+    db=Depends(get_db)
+) -> RoleAssignment:
+    """Assign a role to a specific subfolder within a mounted drive"""
+    try:
+        # First try to get drive from database
+        cursor = await db.execute(
+            "SELECT id, path, label FROM so_drives WHERE id = ? AND enabled = 1",
+            (request.root_id,)
+        )
+        row = await cursor.fetchone()
+        
+        if row:
+            drive_id, drive_path, drive_label = row
+        else:
+            # Check if it's an environment drive
+            env_drives = discover_env_drives()
+            env_drive = next((d for d in env_drives if d["id"] == request.root_id), None)
+            
+            if not env_drive:
+                raise HTTPException(status_code=404, detail=f"Drive '{request.root_id}' not found or disabled")
+            
+            drive_id = env_drive["id"]
+            drive_path = env_drive["path"]
+            drive_label = env_drive["label"]
+        
+        # Safely join paths
+        abs_path = safe_join(drive_path, request.subpath)
+        if abs_path is None:
+            raise HTTPException(status_code=400, detail="Invalid path (traversal detected)")
+        
+        # Check if path exists
+        exists = os.path.exists(abs_path)
+        is_dir = os.path.isdir(abs_path) if exists else False
+        writable = False
+        
+        # Create directory if it doesn't exist
+        if not exists:
+            try:
+                os.makedirs(abs_path, exist_ok=True)
+                exists = True
+                is_dir = True
+                logger.info(f"Created directory for role {request.role}: {abs_path}")
+            except Exception as e:
+                logger.error(f"Failed to create directory {abs_path}: {e}")
+                raise HTTPException(status_code=500, detail=f"Cannot create directory: {e}")
+        
+        if not is_dir:
+            raise HTTPException(status_code=400, detail="Path exists but is not a directory")
+        
+        # Check writability
+        writable = check_directory_writable(abs_path)
+        
+        # Validate write requirements for certain roles
+        write_required_roles = ["recording", "editing", "archive"]
+        if request.role in write_required_roles and not writable:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Role '{request.role}' requires write access but directory is not writable"
+            )
+        
+        # Update or insert role assignment
+        now = datetime.utcnow().isoformat()
+        
+        # For environment drives, store with a special prefix to avoid FK issues
+        stored_drive_id = drive_id if not drive_id.startswith("env_") else None
+        
+        await db.execute("""
+            INSERT OR REPLACE INTO so_roles 
+            (role, drive_id, subpath, abs_path, watch, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            request.role,
+            stored_drive_id,  # Will be NULL for env drives, avoiding FK constraint
+            request.subpath,
+            abs_path,
+            1 if request.watch else 0,
+            now,
+            now
+        ))
+        await db.commit()
+        
+        logger.info(f"Assigned role {request.role} to {abs_path}")
+        
+        # TODO: Restart watcher if watch is enabled
+        
+        return RoleAssignment(
+            role=request.role,
+            drive_id=drive_id,
+            drive_label=drive_label or drive_path,
+            subpath=request.subpath,
+            abs_path=abs_path,
+            watch=request.watch,
+            exists=exists,
+            writable=writable
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to assign role: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/roles", response_model=RolesResponse)
+async def get_role_assignments(db=Depends(get_db)) -> RolesResponse:
+    """Get all role assignments"""
+    try:
+        # Define all possible roles
+        all_roles = ["recording", "editing", "archive", "backlog", "assets"]
+        roles_dict = {role: None for role in all_roles}
+        
+        # Get current assignments
+        cursor = await db.execute("""
+            SELECT r.role, r.drive_id, r.subpath, r.abs_path, r.watch,
+                   d.label, d.path
+            FROM so_roles r
+            LEFT JOIN so_drives d ON r.drive_id = d.id
+        """)
+        rows = await cursor.fetchall()
+        
+        for row in rows:
+            role, drive_id, subpath, abs_path, watch, drive_label, drive_path = row
+            
+            # For roles without drive_id (env drives), extract info from path
+            if not drive_id and abs_path:
+                # Try to match with env drives
+                env_drives = discover_env_drives()
+                for env_drive in env_drives:
+                    if abs_path.startswith(env_drive["path"]):
+                        drive_id = env_drive["id"]
+                        drive_label = env_drive["label"]
+                        break
+            
+            # Check current status
+            exists = os.path.exists(abs_path) if abs_path else False
+            writable = check_directory_writable(abs_path) if exists else False
+            
+            roles_dict[role] = RoleAssignment(
+                role=role,
+                drive_id=drive_id or "unknown",
+                drive_label=drive_label or drive_path or "Unknown Drive",
+                subpath=subpath,
+                abs_path=abs_path,
+                watch=bool(watch),
+                exists=exists,
+                writable=writable
+            )
+        
+        return RolesResponse(roles=roles_dict)
+        
+    except Exception as e:
+        logger.error(f"Failed to get role assignments: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/roles/{role}")
+async def remove_role_assignment(
+    role: RoleType,
+    db=Depends(get_db)
+) -> Dict[str, str]:
+    """Remove a role assignment"""
+    try:
+        await db.execute("DELETE FROM so_roles WHERE role = ?", (role,))
+        await db.commit()
+        
+        logger.info(f"Removed role assignment for {role}")
+        
+        return {"message": f"Role '{role}' assignment removed"}
+        
+    except Exception as e:
+        logger.error(f"Failed to remove role assignment: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/{drive_id}", response_model=DriveResponse)
@@ -1205,3 +1545,39 @@ async def _scan_drive(drive_id: str, force_rescan: bool):
         logger.info(f"Scanned drive {drive_id}: found {files_found} files, added {files_added} new assets")
     except Exception as e:
         logger.error(f"Failed to scan drive {drive_id}: {e}")
+
+
+# Role assignment endpoints
+
+def safe_join(base: str, relative: str) -> Optional[str]:
+    """Safely join paths, preventing directory traversal"""
+    base = os.path.abspath(base)
+    if not relative or relative == ".":
+        return base
+    relative = relative.lstrip("/\\")
+    joined = os.path.abspath(os.path.join(base, relative))
+    if not joined.startswith(base):
+        return None
+    return joined
+
+
+def check_directory_writable(path: str) -> bool:
+    """Check if directory is writable"""
+    try:
+        test_file = os.path.join(path, f".streamops_test_{os.getpid()}")
+        with open(test_file, 'w') as f:
+            f.write("test")
+        os.unlink(test_file)
+        return True
+    except:
+        return False
+
+
+async def resolve_role_path(role: RoleType, db) -> Optional[str]:
+    """Resolve a role to its absolute path"""
+    cursor = await db.execute(
+        "SELECT abs_path FROM so_roles WHERE role = ?",
+        (role,)
+    )
+    row = await cursor.fetchone()
+    return row[0] if row else None
