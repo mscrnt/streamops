@@ -19,7 +19,9 @@ export default function WizardRules({ data = [], onChange, defaults }) {
     
     // Initialize with defaults
     return defaults?.rules?.map(r => ({
-      ...r,
+      id: r.id,
+      label: r.label,
+      description: r.description,
       enabled: r.enabled_by_default !== false,
       parameters: { ...r.parameters }
     })) || []
@@ -28,8 +30,9 @@ export default function WizardRules({ data = [], onChange, defaults }) {
   const [expandedRule, setExpandedRule] = useState(null)
   
   useEffect(() => {
+    if (!onChange) return
     onChange(rules)
-  }, [rules])
+  }, [rules]) // Intentionally omit onChange to prevent loops
   
   const toggleRule = (ruleId) => {
     setRules(prev => prev.map(r => 

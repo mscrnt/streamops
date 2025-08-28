@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { 
   Layers, 
   Monitor,
@@ -25,28 +25,26 @@ export default function WizardOverlays({ data = {}, onChange, defaults }) {
   
   const [copied, setCopied] = useState(false)
   
+  // Notify parent of changes
+  useEffect(() => {
+    if (!onChange) return
+    onChange(overlayConfig)
+  }, [overlayConfig]) // Intentionally omit onChange to prevent loops
+  
   const handleToggle = () => {
-    const updated = { ...overlayConfig, enabled: !overlayConfig.enabled }
-    setOverlayConfig(updated)
-    onChange(updated)
+    setOverlayConfig(prev => ({ ...prev, enabled: !prev.enabled }))
   }
   
   const handlePresetChange = (preset) => {
-    const updated = { ...overlayConfig, preset }
-    setOverlayConfig(updated)
-    onChange(updated)
+    setOverlayConfig(prev => ({ ...prev, preset }))
   }
   
   const handlePositionChange = (position) => {
-    const updated = { ...overlayConfig, position }
-    setOverlayConfig(updated)
-    onChange(updated)
+    setOverlayConfig(prev => ({ ...prev, position }))
   }
   
   const handleMarginChange = (e) => {
-    const updated = { ...overlayConfig, margin: parseInt(e.target.value) }
-    setOverlayConfig(updated)
-    onChange(updated)
+    setOverlayConfig(prev => ({ ...prev, margin: parseInt(e.target.value) }))
   }
   
   const copyOverlayUrl = () => {

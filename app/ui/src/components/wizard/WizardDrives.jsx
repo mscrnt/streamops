@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { 
   HardDrive, 
@@ -25,6 +25,7 @@ export default function WizardDrives({ data = [], onChange }) {
   const { api } = useApi()
   const [showPicker, setShowPicker] = useState(false)
   const [currentRole, setCurrentRole] = useState(null)
+  const lastRolesRef = useRef(null)
   
   // Get current role assignments
   const { data: rolesData, isLoading, refetch } = useQuery({
@@ -82,17 +83,23 @@ export default function WizardDrives({ data = [], onChange }) {
   
   // Update parent when roles change
   useEffect(() => {
-    if (rolesData?.roles && onChange) {
-      const assignments = Object.entries(rolesData.roles)
-        .filter(([_, assignment]) => assignment !== null)
-        .map(([role, assignment]) => ({
-          role,
-          ...assignment
-        }))
-      onChange(assignments)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rolesData?.roles]) // Intentionally omit onChange to prevent infinite loops
+    if (!rolesData?.roles || !onChange) return
+    
+    // Check if roles actually changed
+    const rolesStr = JSON.stringify(rolesData.roles)
+    if (rolesStr === lastRolesRef.current) return
+    
+    lastRolesRef.current = rolesStr
+    
+    const assignments = Object.entries(rolesData.roles)
+      .filter(([_, assignment]) => assignment !== null)
+      .map(([role, assignment]) => ({
+        role,
+        ...assignment
+      }))
+    
+    onChange(assignments)
+  }, [rolesData?.roles, onChange])
   
   const handleFolderSelect = async (selection) => {
     console.log('[WizardDrives] handleFolderSelect called with:', selection)

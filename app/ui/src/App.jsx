@@ -32,12 +32,14 @@ function App() {
     queryFn: async () => {
       const response = await api.get('/wizard/state')
       return response.data
-    }
+    },
+    staleTime: 1000 // Consider data stale after 1 second to allow updates to propagate
   })
   
-  // Redirect to wizard if not completed
+  // Redirect to wizard if not completed (but not if already on wizard page)
   useEffect(() => {
-    if (wizardState && !wizardState.completed) {
+    const currentPath = window.location.pathname
+    if (wizardState && !wizardState.completed && currentPath !== '/wizard') {
       navigate('/wizard')
     }
   }, [wizardState, navigate])

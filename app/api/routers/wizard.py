@@ -16,19 +16,25 @@ router = APIRouter()
 
 
 class WizardDriveConfig(BaseModel):
-    """Drive configuration in wizard"""
-    id: str = Field(..., description="Drive identifier")
-    label: str = Field(..., description="User-friendly label")
-    path: str = Field(..., description="Mount path")
-    role: str = Field(..., description="Drive role: recording, editing, archive")
-    enabled: bool = Field(True, description="Whether drive is enabled")
+    """Drive role assignment from wizard"""
+    role: str = Field(..., description="Drive role: recording, editing, archive, backlog, assets")
+    drive_id: Optional[str] = Field(None, description="Drive identifier")
+    drive_label: Optional[str] = Field(None, description="Drive label")
+    subpath: Optional[str] = Field(None, description="Subpath within drive")
+    abs_path: str = Field(..., description="Absolute path")
+    watch: bool = Field(False, description="Whether to watch this folder")
+    exists: bool = Field(True, description="Whether path exists")
+    writable: bool = Field(True, description="Whether path is writable")
 
 
-class WizardOBSConfig(BaseModel):
-    """OBS configuration in wizard"""
-    enabled: bool = Field(..., description="Whether OBS integration is enabled")
-    url: Optional[str] = Field(None, description="OBS WebSocket URL")
-    password: Optional[str] = Field(None, description="OBS WebSocket password")
+class WizardOBSConnectionConfig(BaseModel):
+    """OBS connection configuration from wizard"""
+    id: str = Field(..., description="Connection ID")
+    name: str = Field(..., description="Connection name")
+    ws_url: str = Field(..., description="WebSocket URL")
+    connected: Optional[bool] = Field(False, description="Whether currently connected")
+    auto_connect: Optional[bool] = Field(True, description="Auto-connect on startup")
+    roles: Optional[List[str]] = Field(default_factory=list, description="Connection roles")
 
 
 class WizardRuleConfig(BaseModel):
@@ -48,9 +54,9 @@ class WizardOverlayConfig(BaseModel):
 
 class WizardApplyRequest(BaseModel):
     """Complete wizard configuration to apply"""
-    drives: List[WizardDriveConfig] = Field(..., description="Drive configurations")
-    obs: WizardOBSConfig = Field(..., description="OBS configuration")
-    rules: List[WizardRuleConfig] = Field(..., description="Rule configurations")
+    drives: List[WizardDriveConfig] = Field(..., description="Drive role assignments")
+    obs: List[WizardOBSConnectionConfig] = Field(default_factory=list, description="OBS connections")
+    rules: List[WizardRuleConfig] = Field(default_factory=list, description="Rule configurations")
     overlays: WizardOverlayConfig = Field(..., description="Overlay configuration")
 
 
@@ -191,7 +197,35 @@ async def get_wizard_state(request: Request, db=Depends(get_db)) -> WizardState:
         # Check wizard state in config
         wizard_config = await config_service.get_config("wizard_state")
         
-        if wizard_config:
+        # Even if wizard was marked complete, verify essential drives exist
+        if wizard_config and wizard_config.get("completed", False):
+            # Check if essential drives are configured in the database
+            try:
+                cursor = await db.execute("""
+                    SELECT COUNT(*) 
+                    FROM so_roles 
+                    WHERE role IN ('recording', 'editing')
+                """)
+                count = await cursor.fetchone()
+                
+                # If essential drives are missing, wizard is not complete
+                if not count or count[0] < 2:
+                    logger.info("Wizard marked complete but essential drives missing - resetting wizard state")
+                    return WizardState(
+                        completed=False,
+                        last_completed_at=None,
+                        version="1.0.0"
+                    )
+                    
+            except Exception as db_error:
+                logger.warning(f"Could not verify drive configuration: {db_error}")
+                # If we can't verify, assume wizard needs to run
+                return WizardState(
+                    completed=False,
+                    last_completed_at=None,
+                    version="1.0.0"
+                )
+            
             return WizardState(
                 completed=wizard_config.get("completed", False),
                 last_completed_at=datetime.fromisoformat(wizard_config["last_completed_at"]) if wizard_config.get("last_completed_at") else None,
@@ -224,38 +258,18 @@ async def apply_wizard_config(
         config_service = request.app.state.config
         applied_items = []
         
-        # 1. Configure drives
-        for drive in wizard_request.drives:
-            try:
-                # Insert or update drive in database
-                await db.execute(
-                    """INSERT OR REPLACE INTO so_drives 
-                       (id, path, label, type, enabled, config_json, stats_json, created_at, updated_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))""",
-                    (
-                        drive.id,
-                        drive.path,
-                        drive.label,
-                        drive.role,  # Using role as type
-                        1 if drive.enabled else 0,
-                        json.dumps({"role": drive.role}),
-                        json.dumps({})
-                    )
-                )
-                applied_items.append(f"Drive: {drive.label}")
-            except Exception as e:
-                logger.error(f"Failed to configure drive {drive.id}: {e}")
+        # 1. Drive roles are already configured in the database from the WizardDrives component
+        # Just log what we received
+        for drive_role in wizard_request.drives:
+            applied_items.append(f"Drive role: {drive_role.role} -> {drive_role.abs_path}")
+            logger.info(f"Drive role configured: {drive_role.role} at {drive_role.abs_path}")
         
-        await db.commit()
-        
-        # 2. Configure OBS if enabled
-        if wizard_request.obs.enabled and wizard_request.obs.url:
-            await config_service.set_config("obs", {
-                "enabled": True,
-                "url": wizard_request.obs.url,
-                "password": wizard_request.obs.password  # Should be encrypted in production
-            })
-            applied_items.append("OBS WebSocket connection")
+        # 2. OBS connections are already in the database from the WizardOBS component
+        # Just log what we have
+        if wizard_request.obs:
+            for obs_conn in wizard_request.obs:
+                logger.info(f"OBS connection: {obs_conn.name} at {obs_conn.ws_url}")
+                applied_items.append(f"OBS: {obs_conn.name}")
         
         # 3. Create rules from presets
         for rule_config in wizard_request.rules:
@@ -321,10 +335,10 @@ async def apply_wizard_config(
         logger.info("Wizard configuration applied - watchers should be restarted")
         
         # 8. Schedule initial indexing of existing files
-        recording_drives = [d for d in wizard_request.drives if d.role == "recording" and d.enabled]
+        recording_drives = [d for d in wizard_request.drives if d.role == "recording"]
         for drive in recording_drives:
             # Queue indexing job
-            logger.info(f"Queueing indexing job for {drive.path}")
+            logger.info(f"Queueing indexing job for {drive.abs_path}")
             # This would use NATS to queue the job
         
         return {
@@ -350,9 +364,9 @@ async def create_rule_from_preset(
 ) -> Dict[str, Any]:
     """Create a rule JSON from a preset and parameters"""
     
-    # Find editing drive path
+    # Find editing drive path from role assignments
     editing_drive = next((d for d in drives if d.role == "editing"), None)
-    editing_path = editing_drive.path if editing_drive else "/mnt/editing"
+    editing_path = editing_drive.abs_path if editing_drive else "/mnt/editing"
     
     if preset_id == "remux_move_proxy":
         return {
@@ -422,7 +436,7 @@ async def create_rule_from_preset(
     
     elif preset_id == "archive_old":
         archive_drive = next((d for d in drives if d.role == "archive"), None)
-        archive_path = archive_drive.path if archive_drive else "/mnt/archive"
+        archive_path = archive_drive.abs_path if archive_drive else "/mnt/archive"
         
         return {
             "name": "Archive Old Recordings",

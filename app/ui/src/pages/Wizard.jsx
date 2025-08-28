@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useQuery, useMutation } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { 
   ChevronRight, 
   ChevronLeft, 
@@ -16,7 +16,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import Button from '@/components/ui/Button'
 import { useApi } from '@/hooks/useApi'
 import WizardDrives from '@/components/wizard/WizardDrives'
-import WizardOBS from '@/components/wizard/WizardOBS'
+import WizardOBSMulti from '@/components/wizard/WizardOBSMulti'
 import WizardRules from '@/components/wizard/WizardRules'
 import WizardOverlays from '@/components/wizard/WizardOverlays'
 import WizardReview from '@/components/wizard/WizardReview'
@@ -31,10 +31,10 @@ const WIZARD_STEPS = [
   },
   {
     id: 'obs',
-    title: 'OBS Connection',
-    description: 'Connect to OBS for smarter timing and session tags (optional)',
+    title: 'OBS Connections',
+    description: 'Connect to OBS instances for smarter timing and session tags (optional)',
     icon: Video,
-    component: WizardOBS
+    component: WizardOBSMulti
   },
   {
     id: 'rules',
@@ -61,18 +61,20 @@ const WIZARD_STEPS = [
 
 export default function Wizard() {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const { api } = useApi()
   const [currentStep, setCurrentStep] = useState(0)
   const [wizardData, setWizardData] = useState({
     drives: [],
-    obs: { enabled: false },
+    obs: [],  // Now an array of connections
     rules: [],
     overlays: { enabled: false }
   })
   const [stepErrors, setStepErrors] = useState({})
+  const [isApplying, setIsApplying] = useState(false)
   
   // Check if wizard has been completed
-  const { data: wizardState } = useQuery({
+  const { data: wizardState, refetch: refetchWizardState } = useQuery({
     queryKey: ['wizard', 'state'],
     queryFn: async () => {
       const response = await api.get('/wizard/state')
@@ -92,12 +94,70 @@ export default function Wizard() {
   // Apply wizard configuration
   const applyMutation = useMutation({
     mutationFn: async (data) => {
-      const response = await api.post('/wizard/apply', data)
-      return response.data
+      console.log('[Wizard] Applying configuration:', data)
+      console.log('[Wizard] Data to send:', JSON.stringify(data))
+      
+      try {
+        const response = await api.post('/wizard/apply', data)
+        console.log('[Wizard] Apply response:', response.data)
+        return response.data
+      } catch (error) {
+        console.error('[Wizard] API Error:', error)
+        console.error('[Wizard] Request data was:', data)
+        throw error
+      }
     },
-    onSuccess: () => {
-      // Navigate to dashboard after successful setup
-      navigate('/dashboard')
+    onSuccess: async (data) => {
+      console.log('[Wizard] onSuccess called with data:', data)
+      // Clear the draft since we successfully applied
+      localStorage.removeItem('wizard_draft')
+      // Set applying flag to prevent re-render
+      setIsApplying(true)
+      
+      // Poll the wizard state until it's marked as complete
+      let retries = 0
+      const maxRetries = 10
+      
+      while (retries < maxRetries) {
+        // Invalidate and refetch the wizard state
+        await queryClient.invalidateQueries(['wizard', 'state'])
+        
+        // Fetch using the proper queryFn
+        const result = await queryClient.fetchQuery({
+          queryKey: ['wizard', 'state'],
+          queryFn: async () => {
+            const response = await api.get('/wizard/state')
+            return response.data
+          }
+        })
+        
+        console.log(`[Wizard] Checking wizard state (attempt ${retries + 1}):`, result)
+        
+        if (result?.completed) {
+          console.log('[Wizard] Wizard state confirmed as complete, navigating to dashboard')
+          // Give React a moment to process
+          await new Promise(resolve => setTimeout(resolve, 100))
+          window.location.href = '/dashboard'
+          return
+        }
+        
+        // Wait before next retry
+        await new Promise(resolve => setTimeout(resolve, 500))
+        retries++
+      }
+      
+      // If we couldn't confirm completion after max retries, still navigate
+      console.warn('[Wizard] Could not confirm wizard completion after max retries, navigating anyway')
+      window.location.href = '/dashboard'
+    },
+    onError: (error) => {
+      console.error('[Wizard] Failed to apply configuration:', error)
+      console.error('[Wizard] Error details:', {
+        message: error.message,
+        response: error.response?.data,
+        status: error.response?.status
+      })
+      setIsApplying(false)
     }
   })
   
@@ -119,8 +179,8 @@ export default function Wizard() {
     localStorage.setItem('wizard_draft', JSON.stringify(wizardData))
   }, [wizardData])
   
-  // If wizard is already completed, show option to re-run
-  if (wizardState?.completed) {
+  // If wizard is already completed, show option to re-run (but not while applying)
+  if (wizardState?.completed && !isApplying) {
     return (
       <div className="flex items-center justify-center min-h-screen p-6">
         <Card className="max-w-md">
@@ -178,7 +238,46 @@ export default function Wizard() {
   }
   
   const handleApply = async () => {
-    await applyMutation.mutateAsync(wizardData)
+    console.log('[Wizard] handleApply called')
+    console.log('[Wizard] Starting apply with data:', wizardData)
+    
+    if (!wizardData.drives || wizardData.drives.length === 0) {
+      console.error('[Wizard] No drives configured!')
+      return
+    }
+    
+    // Clean the data to remove any circular references or undefined values
+    const cleanData = {
+      drives: wizardData.drives || [],
+      obs: (wizardData.obs || []).map(conn => ({
+        id: conn.id || '',
+        name: conn.name || '',
+        ws_url: conn.ws_url || '',
+        connected: conn.connected || false,
+        auto_connect: conn.auto_connect !== false,
+        roles: conn.roles || []
+      })),
+      rules: (wizardData.rules || []).map(rule => ({
+        id: rule.id || '',
+        enabled: rule.enabled || false,
+        parameters: rule.parameters || {}
+      })),
+      overlays: wizardData.overlays || { enabled: false }
+    }
+    
+    // Log the exact data being sent
+    console.log('[Wizard] Clean data structure:', JSON.stringify(cleanData, null, 2))
+    
+    setIsApplying(true)
+    try {
+      console.log('[Wizard] Calling mutateAsync with clean data...')
+      const result = await applyMutation.mutateAsync(cleanData)
+      console.log('[Wizard] mutateAsync completed:', result)
+    } catch (error) {
+      console.error('[Wizard] Apply failed:', error)
+      setIsApplying(false)
+      // Error is handled in the mutation's onError
+    }
   }
   
   const isStepValid = (stepId) => {

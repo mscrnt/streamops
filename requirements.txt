@@ -38,6 +38,7 @@ python-dateutil==2.9.0
 pytz==2024.2
 orjson==3.10.14
 tenacity==9.0.0
+python-ulid==3.0.0
 
 # Report generation
 reportlab==4.2.5

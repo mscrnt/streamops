@@ -60,7 +60,8 @@ async def create_tables() -> None:
         tables = [
             "so_assets_fts",  # Drop FTS table first
             "so_thumbs", "so_jobs", "so_sessions", "so_rules",
-            "so_overlays", "so_configs", "so_reports", "so_drives", "so_assets"
+            "so_overlays", "so_configs", "so_reports", "so_obs_connections",
+            "so_roles", "so_drives", "so_assets"
         ]
         for table in tables:
             try:
@@ -209,6 +210,24 @@ async def create_tables() -> None:
         )
     """)
     
+    # OBS connections table for multi-instance support
+    await _db.execute("""
+        CREATE TABLE IF NOT EXISTS so_obs_connections (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            ws_url TEXT NOT NULL,
+            password TEXT,
+            auto_connect BOOLEAN DEFAULT 1,
+            enabled BOOLEAN DEFAULT 1,
+            roles_json TEXT,
+            last_status TEXT,
+            last_error TEXT,
+            last_seen_ts TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
     # Drives table for watch folders
     await _db.execute("""
         CREATE TABLE IF NOT EXISTS so_drives (
@@ -250,6 +269,7 @@ async def create_tables() -> None:
     await _db.execute("CREATE INDEX IF NOT EXISTS idx_jobs_blocked ON so_jobs(blocked_reason)")
     await _db.execute("CREATE INDEX IF NOT EXISTS idx_rules_enabled ON so_rules(enabled)")
     await _db.execute("CREATE INDEX IF NOT EXISTS idx_rules_priority ON so_rules(priority)")
+    await _db.execute("CREATE INDEX IF NOT EXISTS idx_obs_enabled ON so_obs_connections(enabled)")
     
     # Create FTS5 virtual table for full-text search
     await _db.execute("""

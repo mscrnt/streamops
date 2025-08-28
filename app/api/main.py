@@ -7,8 +7,8 @@ import os
 import logging
 from pathlib import Path
 
-from app.api.routers import health, config, assets, jobs, rules, overlays, reports, drives, system, wizard, websocket, settings, guardrails, filesystem
-from app.api.db.database import init_db, close_db
+from app.api.routers import health, config, assets, jobs, rules, overlays, reports, drives, system, wizard, websocket, settings, guardrails, filesystem, obs
+from app.api.db.database import init_db, close_db, get_db
 from app.api.services.nats_service import NATSService
 from app.api.services.config_service import ConfigService
 from app.api.services.gpu_service import gpu_service
@@ -66,18 +66,23 @@ async def lifespan(app: FastAPI):
         app.state.nats = nats_service
         logger.info("NATS initialized")
     
-    # Initialize OBS service if configured
-    obs_url = os.getenv("OBS_WS_URL") or config_service._custom_config.get("obs", {}).get("url")
-    if obs_url:
-        logger.info("Initializing OBS WebSocket connection...")
-        from app.api.services.obs_service import OBSService
-        obs_service = OBSService(nats_service if 'nats_service' in locals() else None)
-        await obs_service.connect()
-        app.state.obs = obs_service
-        logger.info(f"OBS connection status: {obs_service.connected}")
-    else:
-        app.state.obs = None
-        logger.info("OBS WebSocket not configured")
+    # Seed OBS connections from environment if needed
+    logger.info("Checking for OBS environment configuration...")
+    from app.api.services.obs_seeder import seed_obs_connections_from_env
+    db = await get_db()
+    await seed_obs_connections_from_env(db)
+    
+    # Initialize OBS Manager for multi-instance support
+    logger.info("Initializing OBS Manager...")
+    from app.api.services.obs_manager import get_obs_manager
+    obs_manager = get_obs_manager()
+    obs_manager.nats = nats_service if 'nats_service' in locals() else None
+    await obs_manager.connect_all_autostart()
+    app.state.obs_manager = obs_manager
+    logger.info(f"OBS Manager initialized with {len(obs_manager.clients)} connections")
+    
+    # Use manager for legacy API compatibility
+    app.state.obs = obs_manager
     
     # Initialize guardrails with OBS service
     logger.info("Initializing guardrails system...")
@@ -105,10 +110,10 @@ async def lifespan(app: FastAPI):
         await app.state.scheduler.stop()
         logger.info("Deferred job scheduler stopped")
     
-    # Close OBS connection
+    # Close OBS connections
     if hasattr(app.state, 'obs') and app.state.obs:
-        await app.state.obs.disconnect()
-        logger.info("OBS disconnected")
+        await app.state.obs.disconnect_all()
+        logger.info("OBS connections disconnected")
     
     # Close NATS connection
     if hasattr(app.state, 'nats'):
@@ -164,6 +169,7 @@ app.include_router(filesystem.router, prefix="/api/fs", tags=["filesystem"])
 app.include_router(system.router, prefix="/api/system", tags=["system"])
 app.include_router(wizard.router, prefix="/api/wizard", tags=["wizard"])
 app.include_router(settings.router, prefix="/api", tags=["settings"])
+app.include_router(obs.router, tags=["obs"])  # No prefix, it's already in the router
 
 # Main WebSocket endpoint for UI updates
 import asyncio

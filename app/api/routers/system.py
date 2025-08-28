@@ -599,17 +599,29 @@ async def get_system_summary(request: Request, db=Depends(get_db)) -> Dict[str, 
         )
         job_24h = await cursor.fetchone()
         
-        # Get OBS status
+        # Get OBS status - check for any connected instances
         obs_info = {"connected": False, "version": None, "recording": False}
         if hasattr(request.app.state, 'obs'):
-            obs_service = request.app.state.obs
-            if obs_service and obs_service.connected:
-                status = await obs_service.get_status()
+            obs_manager = request.app.state.obs
+            if obs_manager and hasattr(obs_manager, 'get_all_statuses'):
+                # For multi-OBS support
+                statuses = await obs_manager.get_all_statuses()
+                any_connected = any(s.get("connected", False) for s in statuses.values())
+                any_recording = any(s.get("recording", False) for s in statuses.values())
                 obs_info = {
-                    "connected": True,
+                    "connected": any_connected,
                     "version": "28.0.0",  # Would get from actual OBS
-                    "recording": status.get("recording", False)
+                    "recording": any_recording
                 }
+            elif obs_manager and hasattr(obs_manager, 'connected'):
+                # Legacy single OBS support
+                if obs_manager.connected:
+                    status = await obs_manager.get_status()
+                    obs_info = {
+                        "connected": True,
+                        "version": "28.0.0",  # Would get from actual OBS
+                        "recording": status.get("recording", False)
+                    }
         
         # Check guardrails
         guardrails_active = False

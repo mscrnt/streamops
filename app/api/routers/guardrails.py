@@ -69,20 +69,23 @@ async def get_guardrails_status(db=Depends(get_db)) -> GuardrailStatus:
         if disk_free_gb < _guardrails_config.min_disk_gb:
             reasons.append(f"Disk free {disk_free_gb:.1f}GB < {_guardrails_config.min_disk_gb}GB")
         
-        # Check recording and streaming status
+        # Check recording and streaming status across all OBS instances
         is_recording = False
         is_streaming = False
         if _obs_service:
             try:
+                # _obs_service is now the OBS Manager
+                state = _obs_service.get_state()
+                
                 if _guardrails_config.pause_if_recording:
-                    is_recording = await _obs_service.is_recording()
+                    is_recording = state.get('recording_count', 0) > 0
                     if is_recording:
-                        reasons.append("OBS is recording")
+                        reasons.append(f"OBS is recording ({state['recording_count']} instance{'s' if state['recording_count'] > 1 else ''})")
                 
                 if _guardrails_config.pause_if_streaming:
-                    is_streaming = await _obs_service.is_streaming()
+                    is_streaming = state.get('streaming_count', 0) > 0
                     if is_streaming:
-                        reasons.append("OBS is streaming")
+                        reasons.append(f"OBS is streaming ({state['streaming_count']} instance{'s' if state['streaming_count'] > 1 else ''})")
             except Exception as e:
                 logger.warning(f"Failed to check OBS status: {e}")
         

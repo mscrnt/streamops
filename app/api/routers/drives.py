@@ -246,20 +246,46 @@ async def create_drive_watch(
 
 @router.get("/status")
 async def get_drives_status(db=Depends(get_db)) -> List[Dict[str, Any]]:
-    """Get status of all drives for dashboard"""
+    """Get status of all drives for dashboard - based on role assignments"""
     try:
-        cursor = await db.execute(
-            """SELECT id, path, label, type, config_json, stats_json, enabled 
-               FROM so_drives 
-               ORDER BY label"""
-        )
-        rows = await cursor.fetchall()
+        # Get role assignments with their paths
+        cursor = await db.execute("""
+            SELECT role, drive_id, abs_path, watch
+            FROM so_roles
+            ORDER BY role
+        """)
+        roles_rows = await cursor.fetchall()
+        
+        if not roles_rows:
+            return []
+        
+        # Group by unique drive paths (extract root drive from abs_path)
+        drives_map = {}
+        for role, drive_id, abs_path, watch in roles_rows:
+            # Extract drive identifier from path
+            if abs_path.startswith("/mnt/"):
+                # Extract drive mount point
+                parts = abs_path.split("/")
+                if len(parts) >= 3:
+                    drive_key = f"/mnt/{parts[2]}"
+                    
+                    if drive_key not in drives_map:
+                        # Initialize drive info
+                        drives_map[drive_key] = {
+                            "id": drive_id or f"env_{parts[2]}",
+                            "path": drive_key,
+                            "label": f"Drive {parts[2].replace('drive_', '').upper()}",
+                            "roles": [],
+                            "watching": False
+                        }
+                    
+                    drives_map[drive_key]["roles"].append(role)
+                    if watch:
+                        drives_map[drive_key]["watching"] = True
         
         drives_status = []
-        for row in rows:
-            drive_id, path, label, drive_type, config_json, stats_json, enabled = row
-            config = json.loads(config_json) if config_json else {}
-            stats = json.loads(stats_json) if stats_json else {}
+        for drive_path, drive_info in drives_map.items():
+            path = drive_info["path"]
             
             # Get current disk usage
             total = 0
@@ -299,19 +325,19 @@ async def get_drives_status(db=Depends(get_db)) -> List[Dict[str, Any]]:
             else:
                 health = "missing"
             
-            # Get watcher status
-            watcher_status = stats.get("watcher_status", "stopped" if not enabled else "listening")
+            # Get watcher status based on watching flag
+            watcher_status = "listening" if drive_info["watching"] else "stopped"
             
             drives_status.append({
-                "id": drive_id,
-                "label": label or drive_id,
+                "id": drive_info["id"],
+                "label": drive_info["label"],
                 "path": path,
-                "role": config.get("role", drive_type),
+                "role": ", ".join(drive_info["roles"]),
                 "total": total,
                 "free": free,
                 "rw": rw,
                 "watcher": watcher_status,
-                "last_event_at": stats.get("last_event_at"),
+                "last_event_at": None,  # Would come from stats if we had them
                 "health": health
             })
         

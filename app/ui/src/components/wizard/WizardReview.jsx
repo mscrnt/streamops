@@ -15,8 +15,9 @@ import { Badge } from '@/components/ui/Badge'
 export default function WizardReview({ allData, onApply, applyMutation }) {
   const { drives, obs, rules, overlays } = allData
   
-  const hasRecordingDrive = drives?.some(d => d.role === 'recording' && d.enabled)
-  const hasEditingDrive = drives?.some(d => d.role === 'editing' && d.enabled)
+  // Check for required roles - drives come as an array of role assignments
+  const hasRecordingDrive = drives?.some(d => d.role === 'recording')
+  const hasEditingDrive = drives?.some(d => d.role === 'editing')
   const enabledRules = rules?.filter(r => r.enabled) || []
   
   const isReady = hasRecordingDrive && hasEditingDrive
@@ -58,15 +59,22 @@ export default function WizardReview({ allData, onApply, applyMutation }) {
           </CardHeader>
           <CardContent>
             <div className="space-y-3">
-              {drives?.filter(d => d.enabled).map(drive => (
-                <div key={drive.id} className="flex items-center justify-between">
-                  <div>
-                    <p className="font-medium text-sm">{drive.label}</p>
-                    <p className="text-xs text-muted-foreground">{drive.path}</p>
+              {drives?.map(drive => (
+                <div key={drive.role} className="flex items-center justify-between">
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium text-sm capitalize">{drive.role}</p>
+                    <p className="text-xs text-muted-foreground truncate">{drive.abs_path}</p>
                   </div>
-                  <Badge variant="outline">
-                    {drive.role}
-                  </Badge>
+                  <div className="flex items-center gap-2 ml-2">
+                    {drive.exists ? (
+                      <Badge variant="success" className="text-xs">Exists</Badge>
+                    ) : (
+                      <Badge variant="destructive" className="text-xs">Missing</Badge>
+                    )}
+                    {drive.watch && (
+                      <Badge variant="outline" className="text-xs">Watching</Badge>
+                    )}
+                  </div>
                 </div>
               ))}
               {(!drives || drives.length === 0) && (
@@ -85,17 +93,30 @@ export default function WizardReview({ allData, onApply, applyMutation }) {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            {obs?.enabled ? (
+            {obs && obs.length > 0 ? (
               <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm">Status</span>
-                  <Badge variant="success">Enabled</Badge>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-sm">URL</span>
-                  <span className="text-sm font-mono text-muted-foreground">
-                    {obs.url}
-                  </span>
+                {obs.map(connection => (
+                  <div key={connection.id} className="flex items-center justify-between">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium">{connection.name}</p>
+                      <p className="text-xs text-muted-foreground truncate">{connection.ws_url}</p>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      {connection.connected ? (
+                        <Badge variant="success" className="text-xs">Connected</Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-xs">Disconnected</Badge>
+                      )}
+                      {connection.auto_connect && (
+                        <Badge variant="secondary" className="text-xs">Auto</Badge>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                <div className="pt-2 border-t">
+                  <p className="text-xs text-muted-foreground">
+                    {obs.length} instance{obs.length !== 1 ? 's' : ''} configured
+                  </p>
                 </div>
               </div>
             ) : (
@@ -214,7 +235,7 @@ export default function WizardReview({ allData, onApply, applyMutation }) {
               </div>
             </div>
             
-            {obs?.enabled && (
+            {obs && obs.length > 0 && (
               <div className="flex items-start space-x-3">
                 <div className="w-6 h-6 rounded-full bg-primary/20 flex items-center justify-center flex-shrink-0 mt-0.5">
                   <span className="text-xs font-medium">4</span>
@@ -222,7 +243,7 @@ export default function WizardReview({ allData, onApply, applyMutation }) {
                 <div>
                   <p className="font-medium text-sm">OBS connects</p>
                   <p className="text-xs text-muted-foreground">
-                    StreamOps will connect to OBS and start tracking your recording sessions
+                    StreamOps will connect to your OBS instance{obs.length > 1 ? 's' : ''} and start tracking recording sessions
                   </p>
                 </div>
               </div>
@@ -244,7 +265,16 @@ export default function WizardReview({ allData, onApply, applyMutation }) {
             </div>
             <Button 
               size="lg"
-              onClick={onApply}
+              onClick={() => {
+                console.log('[WizardReview] Start StreamOps clicked')
+                console.log('[WizardReview] isReady:', isReady)
+                console.log('[WizardReview] onApply:', onApply)
+                if (onApply) {
+                  onApply()
+                } else {
+                  console.error('[WizardReview] onApply is not defined!')
+                }
+              }}
               disabled={!isReady || applyMutation?.isPending}
               className="min-w-48"
             >
