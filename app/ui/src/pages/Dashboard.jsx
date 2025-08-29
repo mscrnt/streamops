@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useQuery, useMutation } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { 
   Activity, 
   HardDrive, 
@@ -29,6 +29,7 @@ import { Badge, StatusBadge } from '@/components/ui/Badge'
 import Button from '@/components/ui/Button'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/Table'
 import { useApi } from '@/hooks/useApi'
+import { useEventStream } from '@/hooks/useEventStream'
 import { formatBytes, formatDuration, formatRelativeTime } from '@/lib/utils'
 import MetricCard from '@/components/dashboard/MetricCard'
 import DriveTile from '@/components/dashboard/DriveTile'
@@ -42,7 +43,11 @@ import toast from 'react-hot-toast'
 export default function Dashboard() {
   const navigate = useNavigate()
   const { api } = useApi()
+  const queryClient = useQueryClient()
   const [timeRange, setTimeRange] = useState('24h')
+  
+  // Enable event stream for real-time updates
+  useEventStream()
   
   // Fetch system summary
   const { data: summary, isLoading: summaryLoading, refetch: refetchSummary } = useQuery({
@@ -92,7 +97,7 @@ export default function Dashboard() {
     staleTime: 2000
   })
   
-  // Fetch recent assets
+  // Fetch recent assets - poll more frequently if OBS is connected
   const { data: recentAssets, isLoading: assetsLoading } = useQuery({
     queryKey: ['assets', 'recent', { limit: 10 }],
     queryFn: async () => {
@@ -101,8 +106,9 @@ export default function Dashboard() {
       })
       return response.data
     },
-    refetchInterval: 15000,
-    staleTime: 10000
+    // Poll every 10 seconds if OBS is connected, otherwise every 30 seconds
+    refetchInterval: (summary?.obs?.connected) ? 10000 : 30000,
+    staleTime: (summary?.obs?.connected) ? 8000 : 25000
   })
   
   // System action mutation

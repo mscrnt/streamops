@@ -89,7 +89,7 @@ async def create_tables() -> None:
             container TEXT,
             streams_json TEXT,
             tags_json TEXT,
-            status TEXT DEFAULT 'indexed',
+            status TEXT DEFAULT 'completed',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
@@ -276,7 +276,7 @@ async def create_tables() -> None:
         CREATE VIRTUAL TABLE IF NOT EXISTS so_assets_fts USING fts5(
             id UNINDEXED,
             abs_path,
-            tags,
+            tags_json,
             content=so_assets,
             tokenize='porter'
         )
@@ -287,8 +287,8 @@ async def create_tables() -> None:
         CREATE TRIGGER IF NOT EXISTS so_assets_fts_insert
         AFTER INSERT ON so_assets
         BEGIN
-            INSERT INTO so_assets_fts(id, abs_path, tags)
-            VALUES (new.id, new.abs_path, json_extract(new.tags_json, '$'));
+            INSERT INTO so_assets_fts(id, abs_path, tags_json)
+            VALUES (new.id, new.abs_path, new.tags_json);
         END
     """)
     
@@ -298,7 +298,7 @@ async def create_tables() -> None:
         BEGIN
             UPDATE so_assets_fts
             SET abs_path = new.abs_path,
-                tags = json_extract(new.tags_json, '$')
+                tags_json = new.tags_json
             WHERE id = new.id;
         END
     """)

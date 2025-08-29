@@ -1,4 +1,6 @@
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { 
   FileVideo, 
   Film, 
@@ -12,15 +14,44 @@ import {
   ChevronRight,
   Clock,
   HardDrive,
-  Tag
+  Tag,
+  Folder,
+  RefreshCw
 } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/Card'
 import Button from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
 import { formatBytes, formatDuration, formatRelativeTime } from '@/lib/utils'
+import { useApi } from '@/hooks/useApi'
+import toast from 'react-hot-toast'
 
 export default function RecentAssetsList({ assets, loading, onViewAll }) {
   const navigate = useNavigate()
+  const { api } = useApi()
+  const queryClient = useQueryClient()
+  const [isScanning, setIsScanning] = useState(false)
+  
+  // Scan mutation
+  const scanMutation = useMutation({
+    mutationFn: () => api.post('/assets/scan/recording'),
+    onMutate: () => {
+      setIsScanning(true)
+    },
+    onSuccess: (response) => {
+      toast.success(response.data.message || 'Scan completed')
+      // Invalidate queries to refresh the list
+      queryClient.invalidateQueries(['dashboard'])
+      queryClient.invalidateQueries(['assets'])
+      // Specifically invalidate the recent assets query
+      queryClient.invalidateQueries(['assets', 'recent'])
+    },
+    onError: (error) => {
+      toast.error(`Scan failed: ${error.response?.data?.detail || error.message}`)
+    },
+    onSettled: () => {
+      setIsScanning(false)
+    }
+  })
   
   // Get icon based on media type
   const getAssetIcon = (asset) => {
@@ -81,28 +112,50 @@ export default function RecentAssetsList({ assets, loading, onViewAll }) {
     )
   }
   
+  // Extract folder from filepath
+  const getFolderName = (filepath) => {
+    if (!filepath) return ''
+    const parts = filepath.split('/')
+    // Return the last folder in the path (parent of the file)
+    if (parts.length >= 2) {
+      return parts[parts.length - 2]
+    }
+    return ''
+  }
+  
   return (
     <Card>
       <CardHeader>
         <div className="flex items-center justify-between">
           <div>
-            <CardTitle>Recent Assets</CardTitle>
+            <CardTitle>Recent Recordings</CardTitle>
             <CardDescription>
               {assets && assets.length > 0 
-                ? `${assets.length} assets in the last 24 hours`
-                : 'No recent assets'}
+                ? `${assets.length} recordings from watched folders`
+                : 'No recent recordings'}
             </CardDescription>
           </div>
-          {assets && assets.length > 0 && (
+          <div className="flex items-center gap-2">
             <Button 
-              variant="outline" 
+              variant="ghost" 
               size="sm" 
-              onClick={onViewAll}
+              onClick={() => scanMutation.mutate()}
+              disabled={isScanning || loading}
+              title="Scan for new recordings"
             >
-              View All
-              <ChevronRight className="h-4 w-4 ml-1" />
+              <RefreshCw className={`h-4 w-4 ${isScanning ? 'animate-spin' : ''}`} />
             </Button>
-          )}
+            {assets && assets.length > 0 && (
+              <Button 
+                variant="outline" 
+                size="sm" 
+                onClick={onViewAll}
+              >
+                View All
+                <ChevronRight className="h-4 w-4 ml-1" />
+              </Button>
+            )}
+          </div>
         </div>
       </CardHeader>
       <CardContent>
@@ -151,6 +204,10 @@ export default function RecentAssetsList({ assets, loading, onViewAll }) {
                           {asset.filename}
                         </p>
                         <div className="flex items-center space-x-2 mt-1">
+                          <span className="text-xs text-muted-foreground">
+                            <Folder className="inline h-3 w-3 mr-1" />
+                            {getFolderName(asset.filepath)}
+                          </span>
                           {qualityLabel && (
                             <Badge variant={getQualityVariant(asset)} className="text-xs">
                               {qualityLabel}
@@ -159,7 +216,7 @@ export default function RecentAssetsList({ assets, loading, onViewAll }) {
                           {asset.metadata?.duration && (
                             <span className="text-xs text-muted-foreground">
                               <Clock className="inline h-3 w-3 mr-1" />
-                              {formatDuration(0, asset.metadata.duration * 1000)}
+                              {formatDuration(asset.metadata.duration)}
                             </span>
                           )}
                           {asset.metadata?.size_bytes && (
@@ -246,16 +303,26 @@ export default function RecentAssetsList({ assets, loading, onViewAll }) {
         ) : (
           <div className="text-center py-12">
             <FileVideo className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-            <h3 className="text-lg font-medium mb-2">No Recent Assets</h3>
+            <h3 className="text-lg font-medium mb-2">No Recent Recordings</h3>
             <p className="text-muted-foreground text-sm mb-4">
-              Media files will appear here after they're recorded and processed.
+              Recordings will appear here once they're detected in your recording folder.
             </p>
-            <Button 
-              variant="outline"
-              onClick={() => navigate('/drives')}
-            >
-              Configure Drives
-            </Button>
+            <div className="flex justify-center gap-2">
+              <Button 
+                variant="default"
+                onClick={() => scanMutation.mutate()}
+                disabled={isScanning}
+              >
+                <RefreshCw className={`h-4 w-4 mr-2 ${isScanning ? 'animate-spin' : ''}`} />
+                Scan for Recordings
+              </Button>
+              <Button 
+                variant="outline"
+                onClick={() => navigate('/assets')}
+              >
+                View All Assets
+              </Button>
+            </div>
           </div>
         )}
       </CardContent>

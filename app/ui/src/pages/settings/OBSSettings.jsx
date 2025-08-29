@@ -1,359 +1,494 @@
 import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { 
-  Save, RotateCcw, Video, CheckCircle, XCircle, 
-  Loader2, Eye, EyeOff, TestTube, Info 
+  Plus, Trash2, Edit2, Save, X, CheckCircle, XCircle, 
+  Loader2, Eye, EyeOff, TestTube, Info, Video, Wifi, WifiOff,
+  Settings, Power, PowerOff
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useApi } from '@/hooks/useApi';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
+import Input from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
+import Checkbox from '@/components/ui/Checkbox';
 import { cn } from '@/lib/utils';
+import * as Dialog from '@radix-ui/react-dialog';
 
 const OBSSettings = () => {
   const { api } = useApi();
   const queryClient = useQueryClient();
-  const [isDirty, setIsDirty] = useState(false);
-  const [showPassword, setShowPassword] = useState(false);
-  const [testResult, setTestResult] = useState(null);
-  const [formData, setFormData] = useState({
-    obs: {
-      url: 'ws://host.docker.internal:4455',
-      password: '',
-      auto_connect: true
-    }
+  const [connections, setConnections] = useState([]);
+  const [editingConnection, setEditingConnection] = useState(null);
+  const [showAddDialog, setShowAddDialog] = useState(false);
+  const [showPasswordFor, setShowPasswordFor] = useState({});
+  const [testingConnection, setTestingConnection] = useState(null);
+  
+  // New connection form
+  const [newConnection, setNewConnection] = useState({
+    name: '',
+    ws_url: 'ws://host.docker.internal:4455',
+    password: '',
+    auto_connect: true,
+    roles: []
   });
 
-  // Fetch settings
-  const { data: settings, isLoading } = useQuery({
-    queryKey: ['settings'],
-    queryFn: () => api.get('/settings').then(r => r.data)
+  // Fetch OBS connections
+  const { data: obsData, isLoading, refetch } = useQuery({
+    queryKey: ['obs', 'connections'],
+    queryFn: () => api.get('/obs').then(r => r.data)
   });
 
-  // Update form when settings load
+  // Update state when data loads
   useEffect(() => {
-    if (settings?.obs) {
-      setFormData({ obs: settings.obs });
-      setIsDirty(false);
+    if (obsData) {
+      // Handle both array response and object with connections property
+      setConnections(Array.isArray(obsData) ? obsData : obsData.connections || []);
     }
-  }, [settings]);
+  }, [obsData]);
 
-  // Save mutation
-  const saveMutation = useMutation({
-    mutationFn: (data) => api.put('/settings', data),
-    onSuccess: (response) => {
-      queryClient.invalidateQueries(['settings']);
-      toast.success('OBS settings saved successfully');
-      setIsDirty(false);
-      
-      // If auto-connect is enabled, trigger connection
-      if (formData.obs.auto_connect) {
-        toast.info('Reconnecting to OBS...');
-        // The backend should handle reconnection
-      }
+  // Create connection mutation
+  const createMutation = useMutation({
+    mutationFn: (data) => api.post('/obs', data),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['obs']);
+      toast.success('OBS connection added');
+      setShowAddDialog(false);
+      setNewConnection({
+        name: '',
+        ws_url: 'ws://host.docker.internal:4455',
+        password: '',
+        auto_connect: true,
+        roles: []
+      });
+      refetch();
     },
     onError: (error) => {
-      toast.error(`Failed to save: ${error.response?.data?.detail || error.message}`);
+      toast.error(`Failed to add: ${error.response?.data?.detail || error.message}`);
+    }
+  });
+
+  // Update connection mutation
+  const updateMutation = useMutation({
+    mutationFn: ({ id, ...data }) => api.put(`/obs/${id}`, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['obs']);
+      toast.success('Connection updated');
+      setEditingConnection(null);
+      refetch();
+    },
+    onError: (error) => {
+      toast.error(`Failed to update: ${error.response?.data?.detail || error.message}`);
+    }
+  });
+
+  // Delete connection mutation
+  const deleteMutation = useMutation({
+    mutationFn: (id) => api.delete(`/obs/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['obs']);
+      toast.success('Connection removed');
+      refetch();
+    },
+    onError: (error) => {
+      toast.error(`Failed to delete: ${error.response?.data?.detail || error.message}`);
     }
   });
 
   // Test connection mutation
   const testMutation = useMutation({
-    mutationFn: (credentials) => api.post('/system/probe-obs', credentials),
-    onSuccess: (response) => {
-      setTestResult(response.data);
+    mutationFn: (id) => api.post(`/obs/${id}/test`),
+    onSuccess: (response, id) => {
+      setTestingConnection(null);
       if (response.data.ok) {
-        toast.success(`Connected to OBS ${response.data.version || ''}`);
+        toast.success(`Connected to OBS ${response.data.obs_version || ''}`);
       } else {
-        toast.error(response.data.reason || 'Connection failed');
+        toast.error(response.data.error || 'Connection failed');
       }
     },
     onError: (error) => {
-      setTestResult({ ok: false, reason: error.message });
+      setTestingConnection(null);
       toast.error(`Test failed: ${error.response?.data?.detail || error.message}`);
     }
   });
 
-  const handleChange = (field, value) => {
-    setFormData(prev => ({
-      obs: {
-        ...prev.obs,
-        [field]: value
-      }
-    }));
-    setIsDirty(true);
-    setTestResult(null); // Clear test result when settings change
-  };
-
-  const handleSave = () => {
-    // Don't send masked password if it hasn't changed
-    const dataToSave = { ...formData };
-    if (dataToSave.obs.password === '********') {
-      // Keep existing password
-      delete dataToSave.obs.password;
+  // Connect/disconnect mutation
+  const toggleConnectionMutation = useMutation({
+    mutationFn: ({ id, connect }) => 
+      connect ? api.post(`/obs/${id}/connect`) : api.post(`/obs/${id}/disconnect`),
+    onSuccess: (_, { connect }) => {
+      queryClient.invalidateQueries(['obs']);
+      toast.success(connect ? 'Connected' : 'Disconnected');
+      refetch();
+    },
+    onError: (error) => {
+      toast.error(`Failed: ${error.response?.data?.detail || error.message}`);
     }
-    saveMutation.mutate(dataToSave);
+  });
+
+  const handleAddConnection = () => {
+    if (!newConnection.name || !newConnection.ws_url) {
+      toast.error('Name and URL are required');
+      return;
+    }
+    createMutation.mutate(newConnection);
   };
 
-  const handleReset = () => {
-    if (window.confirm('Reset OBS settings to defaults?')) {
-      api.post('/settings/reset/obs')
-        .then(() => {
-          queryClient.invalidateQueries(['settings']);
-          toast.success('OBS settings reset to defaults');
-          setIsDirty(false);
-          setTestResult(null);
-        })
-        .catch(err => {
-          toast.error(`Failed to reset: ${err.response?.data?.detail || err.message}`);
-        });
+  const handleUpdateConnection = (connection) => {
+    updateMutation.mutate(connection);
+  };
+
+  const handleDeleteConnection = (id, name) => {
+    if (window.confirm(`Delete OBS connection "${name}"?`)) {
+      deleteMutation.mutate(id);
     }
   };
 
-  const handleTest = () => {
-    const testData = {
-      url: formData.obs.url,
-      password: formData.obs.password === '********' 
-        ? settings?.obs?.password || '' 
-        : formData.obs.password
-    };
-    testMutation.mutate(testData);
+  const handleTestConnection = (id) => {
+    setTestingConnection(id);
+    testMutation.mutate(id);
+  };
+
+  const handleToggleConnection = (id, currentlyConnected) => {
+    toggleConnectionMutation.mutate({ id, connect: !currentlyConnected });
+  };
+
+  const toggleRole = (roles, role) => {
+    if (!roles) return [role];
+    if (roles.includes(role)) {
+      return roles.filter(r => r !== role);
+    }
+    return [...roles, role];
   };
 
   if (isLoading) {
     return (
-      <div className="p-6 space-y-6">
-        <div className="animate-pulse space-y-4">
-          <div className="h-8 bg-muted rounded w-1/4"></div>
-          <div className="h-64 bg-muted rounded"></div>
+      <div className="p-6">
+        <div className="flex items-center justify-center">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
         </div>
       </div>
     );
   }
 
   return (
-    <div className="p-6 max-w-5xl">
+    <div className="p-6 space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold">OBS Settings</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            WebSocket connection and recording detection
-          </p>
-        </div>
-        
-        <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            onClick={handleReset}
-          >
-            <RotateCcw className="w-4 h-4 mr-2" />
-            Reset
-          </Button>
-          
-          <Button
-            onClick={handleSave}
-            disabled={!isDirty || saveMutation.isPending}
-            loading={saveMutation.isPending}
-          >
-            <Save className="w-4 h-4 mr-2" />
-            Save Changes
-          </Button>
-        </div>
+      <div>
+        <h1 className="text-2xl font-bold mb-1">OBS Integration</h1>
+        <p className="text-muted-foreground">
+          Manage multiple OBS WebSocket connections for recording detection and automation
+        </p>
       </div>
 
-      {/* Connection Configuration */}
-      <Card className="mb-6">
+      {/* Connections List */}
+      <Card>
         <CardHeader>
-          <CardTitle>Connection Configuration</CardTitle>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle>OBS Connections</CardTitle>
+              <CardDescription>
+                {connections.length} connection{connections.length !== 1 ? 's' : ''} configured
+              </CardDescription>
+            </div>
+            <Button onClick={() => setShowAddDialog(true)}>
+              <Plus className="h-4 w-4 mr-2" />
+              Add Connection
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
-        
-        <div className="space-y-6">
-          {/* WebSocket URL */}
-          <div>
-            <label className="block text-sm font-medium mb-2">
-              WebSocket URL
-            </label>
-            <input
-              type="text"
-              value={formData.obs.url}
-              onChange={(e) => handleChange('url', e.target.value)}
-              placeholder="ws://host.docker.internal:4455"
-              className="w-full px-3 py-2 border border-input rounded-lg bg-background text-foreground"
-            />
-            <p className="text-xs text-muted-foreground mt-1">
-              Default: ws://host.docker.internal:4455 (use this for OBS on host machine)
-            </p>
-          </div>
-
-          {/* Password */}
-          <div>
-            <label className="block text-sm font-medium mb-2">
-              Password
-            </label>
-            <div className="relative">
-              <input
-                type={showPassword ? 'text' : 'password'}
-                value={formData.obs.password}
-                onChange={(e) => handleChange('password', e.target.value)}
-                placeholder="Enter OBS WebSocket password"
-                className="w-full px-3 py-2 pr-10 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-              />
-              <button
-                type="button"
-                onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-              >
-                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-              </button>
+          {connections.length === 0 ? (
+            <div className="text-center py-8 text-muted-foreground">
+              <Video className="h-12 w-12 mx-auto mb-4 opacity-50" />
+              <p>No OBS connections configured</p>
+              <p className="text-sm mt-1">Add a connection to enable recording detection</p>
             </div>
-            <p className="text-xs text-muted-foreground mt-1">
-              Set in OBS → Tools → WebSocket Server Settings
-            </p>
-          </div>
-
-          {/* Auto-connect */}
-          <div className="flex items-start justify-between">
-            <div className="flex-1">
-              <label className="flex items-center cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={formData.obs.auto_connect}
-                  onChange={(e) => handleChange('auto_connect', e.target.checked)}
-                  className="sr-only"
-                />
-                <div className={cn(
-                  "relative inline-flex h-6 w-11 items-center rounded-full transition",
-                  formData.obs.auto_connect 
-                    ? 'bg-primary' 
-                    : 'bg-muted'
-                )}>
-                  <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition ${
-                    formData.obs.auto_connect ? 'translate-x-6' : 'translate-x-1'
-                  }`} />
+          ) : (
+            <div className="space-y-4">
+              {connections.map((connection) => (
+                <div key={connection.id} className="border rounded-lg p-4">
+                  <div className="flex items-start justify-between mb-3">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 mb-1">
+                        <h3 className="font-medium">{connection.name}</h3>
+                        {connection.connected ? (
+                          <Badge variant="success" className="text-xs">
+                            <Wifi className="h-3 w-3 mr-1" />
+                            Connected
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="text-xs">
+                            <WifiOff className="h-3 w-3 mr-1" />
+                            Disconnected
+                          </Badge>
+                        )}
+                        {connection.recording && (
+                          <Badge variant="destructive" className="text-xs">
+                            Recording
+                          </Badge>
+                        )}
+                        {connection.streaming && (
+                          <Badge variant="warning" className="text-xs">
+                            Streaming
+                          </Badge>
+                        )}
+                      </div>
+                      <p className="text-sm text-muted-foreground">{connection.ws_url}</p>
+                    </div>
+                    
+                    <div className="flex items-center gap-1">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleTestConnection(connection.id)}
+                        disabled={testingConnection === connection.id}
+                      >
+                        {testingConnection === connection.id ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <TestTube className="h-4 w-4" />
+                        )}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleToggleConnection(connection.id, connection.connected)}
+                      >
+                        {connection.connected ? (
+                          <PowerOff className="h-4 w-4" />
+                        ) : (
+                          <Power className="h-4 w-4" />
+                        )}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setEditingConnection(connection)}
+                      >
+                        <Edit2 className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleDeleteConnection(connection.id, connection.name)}
+                        className="text-destructive hover:text-destructive"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                  
+                  {/* Connection Details */}
+                  <div className="text-sm space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-muted-foreground">Auto-connect:</span>
+                      <span>{connection.auto_connect ? 'Yes' : 'No'}</span>
+                    </div>
+                    {connection.roles && connection.roles.length > 0 && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-foreground">Roles:</span>
+                        <div className="flex gap-1">
+                          {connection.roles.map(role => (
+                            <Badge key={role} variant="secondary" className="text-xs">
+                              {role}
+                            </Badge>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {connection.last_error && (
+                      <div className="mt-2 p-2 bg-destructive/10 rounded text-xs text-destructive">
+                        {connection.last_error}
+                      </div>
+                    )}
+                  </div>
                 </div>
-                <span className="ml-3 text-sm font-medium">
-                  Auto-connect on startup
-                </span>
-              </label>
-              <p className="text-xs text-muted-foreground mt-1 ml-14">
-                Automatically establish connection when StreamOps starts
-              </p>
+              ))}
             </div>
-          </div>
+          )}
+        </CardContent>
+      </Card>
 
-          {/* Test Connection */}
-          <div className="pt-4 border-t border-border">
-            <Button
-              variant="secondary"
-              onClick={handleTest}
-              disabled={testMutation.isPending}
-              loading={testMutation.isPending}
-            >
-              <TestTube className="w-4 h-4 mr-2" />
-              Test Connection
-            </Button>
+      {/* Add Connection Dialog */}
+      <Dialog.Root open={showAddDialog} onOpenChange={setShowAddDialog}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 bg-background/80 backdrop-blur-sm z-50" />
+          <Dialog.Content className="fixed left-[50%] top-[50%] max-h-[85vh] w-[90vw] max-w-[450px] translate-x-[-50%] translate-y-[-50%] rounded-lg bg-background p-6 shadow-lg z-50">
+            <Dialog.Title className="text-lg font-semibold mb-4">
+              Add OBS Connection
+            </Dialog.Title>
             
-            {testResult && (
-              <div className={cn(
-                "mt-3 p-3 rounded-lg flex items-start gap-3 border",
-                testResult.ok 
-                  ? 'bg-green-500/10 border-green-500/20' 
-                  : 'bg-destructive/10 border-destructive/20'
-              )}>
-                {testResult.ok ? (
-                  <CheckCircle className="w-5 h-5 text-green-500 mt-0.5" />
-                ) : (
-                  <XCircle className="w-5 h-5 text-destructive mt-0.5" />
-                )}
-                <div className="flex-1">
-                  <p className={cn(
-                    "text-sm font-medium",
-                    testResult.ok 
-                      ? 'text-green-600 dark:text-green-400' 
-                      : 'text-destructive'
-                  )}>
-                    {testResult.ok ? 'Connection successful' : 'Connection failed'}
-                  </p>
-                  {testResult.version && (
-                    <p className="text-xs text-green-600 dark:text-green-400 mt-1">
-                      OBS Studio version: {testResult.version}
-                    </p>
-                  )}
-                  {testResult.reason && (
-                    <p className="text-xs text-destructive mt-1">
-                      {testResult.reason}
-                    </p>
-                  )}
+            <div className="space-y-4">
+              <div>
+                <label className="text-sm font-medium mb-1 block">Name</label>
+                <Input
+                  value={newConnection.name}
+                  onChange={(e) => setNewConnection({...newConnection, name: e.target.value})}
+                  placeholder="e.g., Main PC, Gaming Rig"
+                />
+              </div>
+              
+              <div>
+                <label className="text-sm font-medium mb-1 block">WebSocket URL</label>
+                <Input
+                  value={newConnection.ws_url}
+                  onChange={(e) => setNewConnection({...newConnection, ws_url: e.target.value})}
+                  placeholder="ws://localhost:4455"
+                />
+              </div>
+              
+              <div>
+                <label className="text-sm font-medium mb-1 block">Password (optional)</label>
+                <Input
+                  type="password"
+                  value={newConnection.password}
+                  onChange={(e) => setNewConnection({...newConnection, password: e.target.value})}
+                  placeholder="OBS WebSocket password"
+                />
+              </div>
+              
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="new-auto-connect"
+                  checked={newConnection.auto_connect}
+                  onCheckedChange={(checked) => setNewConnection({...newConnection, auto_connect: checked})}
+                />
+                <label htmlFor="new-auto-connect" className="text-sm font-medium cursor-pointer">
+                  Auto-connect on startup
+                </label>
+              </div>
+              
+              <div>
+                <label className="text-sm font-medium mb-2 block">Roles (optional)</label>
+                <div className="flex gap-2">
+                  <Button
+                    variant={newConnection.roles?.includes('recording') ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={() => setNewConnection({
+                      ...newConnection,
+                      roles: toggleRole(newConnection.roles, 'recording')
+                    })}
+                  >
+                    Recording
+                  </Button>
+                  <Button
+                    variant={newConnection.roles?.includes('streaming') ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={() => setNewConnection({
+                      ...newConnection,
+                      roles: toggleRole(newConnection.roles, 'streaming')
+                    })}
+                  >
+                    Streaming
+                  </Button>
                 </div>
               </div>
-            )}
-          </div>
-        </div>
-        </CardContent>
-      </Card>
+            </div>
+            
+            <div className="flex justify-end gap-2 mt-6">
+              <Button variant="outline" onClick={() => setShowAddDialog(false)}>
+                Cancel
+              </Button>
+              <Button onClick={handleAddConnection}>
+                Add Connection
+              </Button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
 
-      {/* Help Section */}
-      <div className="p-4 bg-primary/10 border border-primary/20 rounded-lg">
-        <h3 className="text-sm font-semibold text-primary mb-2">
-          <Info className="w-4 h-4 inline mr-2" />
-          Setting up OBS WebSocket
-        </h3>
-        <ol className="text-sm text-primary space-y-1 ml-6">
-          <li>1. Open OBS Studio (v28.0 or later)</li>
-          <li>2. Go to Tools → WebSocket Server Settings</li>
-          <li>3. Enable "Enable WebSocket server"</li>
-          <li>4. Set a password and note the port (default: 4455)</li>
-          <li>5. Click "Show Connect Info" to verify settings</li>
-          <li>6. Enter the same password here and test connection</li>
-        </ol>
-      </div>
-
-      {/* Features */}
-      <Card className="mt-6">
-        <CardHeader>
-          <CardTitle>OBS Integration Features</CardTitle>
-        </CardHeader>
-        <CardContent>
-        
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <FeatureCard
-            icon={Video}
-            title="Recording Detection"
-            description="Automatically detect when OBS is recording"
-          />
-          <FeatureCard
-            icon={Video}
-            title="Scene Markers"
-            description="Mark scene changes during recording"
-          />
-          <FeatureCard
-            icon={Video}
-            title="Auto-pause Processing"
-            description="Pause jobs while recording to prevent dropped frames"
-          />
-          <FeatureCard
-            icon={Video}
-            title="Session Tracking"
-            description="Group recordings into sessions with metadata"
-          />
-        </div>
-        </CardContent>
-      </Card>
+      {/* Edit Connection Dialog */}
+      {editingConnection && (
+        <Dialog.Root open={!!editingConnection} onOpenChange={() => setEditingConnection(null)}>
+          <Dialog.Portal>
+            <Dialog.Overlay className="fixed inset-0 bg-background/80 backdrop-blur-sm z-50" />
+            <Dialog.Content className="fixed left-[50%] top-[50%] max-h-[85vh] w-[90vw] max-w-[450px] translate-x-[-50%] translate-y-[-50%] rounded-lg bg-background p-6 shadow-lg z-50">
+              <Dialog.Title className="text-lg font-semibold mb-4">
+                Edit OBS Connection
+              </Dialog.Title>
+              
+              <div className="space-y-4">
+                <div>
+                  <label className="text-sm font-medium mb-1 block">Name</label>
+                  <Input
+                    value={editingConnection.name}
+                    onChange={(e) => setEditingConnection({...editingConnection, name: e.target.value})}
+                    placeholder="Connection name"
+                  />
+                </div>
+                
+                <div>
+                  <label className="text-sm font-medium mb-1 block">WebSocket URL</label>
+                  <Input
+                    value={editingConnection.ws_url}
+                    onChange={(e) => setEditingConnection({...editingConnection, ws_url: e.target.value})}
+                    placeholder="ws://localhost:4455"
+                  />
+                </div>
+                
+                <div>
+                  <label className="text-sm font-medium mb-1 block">Password</label>
+                  <Input
+                    type="password"
+                    value={editingConnection.password || ''}
+                    onChange={(e) => setEditingConnection({...editingConnection, password: e.target.value})}
+                    placeholder="Leave blank to keep current"
+                  />
+                </div>
+                
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="edit-auto-connect"
+                    checked={editingConnection.auto_connect}
+                    onCheckedChange={(checked) => setEditingConnection({...editingConnection, auto_connect: checked})}
+                  />
+                  <label htmlFor="edit-auto-connect" className="text-sm font-medium cursor-pointer">
+                    Auto-connect on startup
+                  </label>
+                </div>
+                
+                <div>
+                  <label className="text-sm font-medium mb-2 block">Roles</label>
+                  <div className="flex gap-2">
+                    <Button
+                      variant={editingConnection.roles?.includes('recording') ? 'default' : 'outline'}
+                      size="sm"
+                      onClick={() => setEditingConnection({
+                        ...editingConnection,
+                        roles: toggleRole(editingConnection.roles, 'recording')
+                      })}
+                    >
+                      Recording
+                    </Button>
+                    <Button
+                      variant={editingConnection.roles?.includes('streaming') ? 'default' : 'outline'}
+                      size="sm"
+                      onClick={() => setEditingConnection({
+                        ...editingConnection,
+                        roles: toggleRole(editingConnection.roles, 'streaming')
+                      })}
+                    >
+                      Streaming
+                    </Button>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="flex justify-end gap-2 mt-6">
+                <Button variant="outline" onClick={() => setEditingConnection(null)}>
+                  Cancel
+                </Button>
+                <Button onClick={() => handleUpdateConnection(editingConnection)}>
+                  Save Changes
+                </Button>
+              </div>
+            </Dialog.Content>
+          </Dialog.Portal>
+        </Dialog.Root>
+      )}
     </div>
   );
 };
-
-const FeatureCard = ({ icon: Icon, title, description }) => (
-  <div className="flex items-start gap-3 p-3 bg-muted/50 rounded-lg">
-    <Icon className="w-5 h-5 text-primary mt-0.5" />
-    <div>
-      <p className="text-sm font-medium">{title}</p>
-      <p className="text-xs text-muted-foreground mt-0.5">{description}</p>
-    </div>
-  </div>
-);
 
 export default OBSSettings;

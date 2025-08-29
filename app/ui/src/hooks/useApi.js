@@ -155,8 +155,10 @@ export const useDrives = () => {
   return useQuery({
     queryKey: ['drives'],
     queryFn: async () => {
-      const response = await api.get('/drives')
-      return response.data
+      const response = await api.get('/drives/', {
+        params: { page: 1, per_page: 100 }
+      })
+      return response.data.drives || []
     },
   })
 }

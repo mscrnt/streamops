@@ -1,393 +1,248 @@
-from typing import Dict, Any
+"""Index job for cataloging media assets"""
 import os
-import logging
 import json
-import hashlib
-from pathlib import Path
+import logging
 from datetime import datetime
-
-from app.worker.jobs.base import BaseJob
+from pathlib import Path
+from typing import Dict, Any, Optional
+import asyncio
+from ulid import ULID
 
 logger = logging.getLogger(__name__)
 
-class IndexJob(BaseJob):
-    """Job processor for indexing assets in database"""
+class IndexJob:
+    """Job processor for indexing media assets"""
     
     async def process(self, job_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Index media asset with metadata in database"""
+        """Index a media file into the database"""
+        logger.info(f"IndexJob received job_data: {job_data}")
+        
         job_id = job_data.get("id")
         data = job_data.get("data", {})
         
-        file_path = data.get("file_path")
-        force_reindex = data.get("force_reindex", False)
-        extract_scenes = data.get("extract_scenes", False)
+        # Handle double-nested data structure
+        if "data" in data and isinstance(data.get("data"), dict):
+            logger.info("Detected nested data structure, extracting inner data")
+            data = data["data"]
         
-        if not file_path or not os.path.exists(file_path):
+        logger.info(f"Extracted data: {data}")
+        
+        file_path = data.get("file_path")
+        if not file_path:
+            logger.error(f"No file_path in data. Full job_data: {job_data}")
+            raise ValueError(f"No file_path provided in job data")
+        
+        if not os.path.exists(file_path):
+            logger.error(f"File does not exist: {file_path}")
             raise ValueError(f"File not found: {file_path}")
         
-        await self.update_progress(job_id, 10, "running")
+        logger.info(f"Indexing file: {file_path}")
         
-        # Get file basic info
+        # Get basic file info
         file_stat = os.stat(file_path)
         file_size = file_stat.st_size
-        file_mtime = datetime.fromtimestamp(file_stat.st_mtime)
+        file_mtime = file_stat.st_mtime
+        file_ctime = file_stat.st_ctime
         
-        # Calculate file hash for deduplication
-        file_hash = await self.calculate_file_hash(file_path)
-        
-        await self.update_progress(job_id, 20, "running")
-        
-        # Check if asset already exists
+        # Get database connection
         from app.api.db.database import get_db
         db = await get_db()
         
-        existing_query = """
-            SELECT id, file_hash, file_mtime, metadata 
-            FROM so_assets 
-            WHERE file_path = ? OR file_hash = ?
-        """
+        # Check if already indexed
+        cursor = await db.execute(
+            "SELECT id, mtime FROM so_assets WHERE abs_path = ?",
+            (file_path,)
+        )
+        existing = await cursor.fetchone()
         
-        cursor = await db.execute(existing_query, [file_path, file_hash])
-        existing_asset = await cursor.fetchone()
-        
-        if existing_asset and not force_reindex:
+        if existing:
             # Check if file has been modified
-            existing_mtime = datetime.fromisoformat(existing_asset["file_mtime"]) if existing_asset["file_mtime"] else None
-            
-            if existing_mtime and existing_mtime >= file_mtime:
+            if existing[1] and existing[1] >= file_mtime:
                 logger.info(f"Asset already indexed and up to date: {file_path}")
-                await self.update_progress(job_id, 100, "completed")
-                return {
-                    "success": True,
-                    "asset_id": existing_asset["id"],
-                    "action": "skipped",
-                    "reason": "already_indexed"
-                }
+                return {"success": True, "asset_id": existing[0], "action": "skipped"}
         
-        await self.update_progress(job_id, 30, "running")
+        # Extract basic media info with ffprobe
+        media_info = await self._get_media_info(file_path)
         
-        # Extract media metadata using FFprobe
-        metadata = await self.extract_media_metadata(file_path)
+        # Calculate quick hash if enabled (for deduplication)
+        file_hash = None
+        if data.get("calculate_hash", False):
+            file_hash = await self._calculate_quick_hash(file_path)
         
-        await self.update_progress(job_id, 50, "running")
+        # Generate asset ID or use existing
+        asset_id = existing[0] if existing else str(ULID())
         
-        # Extract additional metadata
-        additional_metadata = await self.extract_additional_metadata(file_path, metadata)
-        metadata.update(additional_metadata)
+        # Prepare the data
+        now = datetime.utcnow().isoformat()
         
-        await self.update_progress(job_id, 70, "running")
-        
-        # Extract scenes if requested
-        scenes = []
-        if extract_scenes and self.is_video_file(file_path):
-            try:
-                scenes = await self.extract_scene_data(file_path)
-            except Exception as e:
-                logger.warning(f"Failed to extract scenes: {e}")
-        
-        await self.update_progress(job_id, 80, "running")
-        
-        # Prepare asset data
-        asset_data = {
-            "file_path": file_path,
-            "file_name": os.path.basename(file_path),
-            "file_size": file_size,
-            "file_hash": file_hash,
-            "file_mtime": file_mtime.isoformat(),
-            "duration": metadata.get("duration"),
-            "width": metadata.get("width"),
-            "height": metadata.get("height"),
-            "fps": metadata.get("fps"),
-            "video_codec": metadata.get("video_codec"),
-            "audio_codec": metadata.get("audio_codec"),
-            "bitrate": metadata.get("bitrate"),
-            "metadata": json.dumps(metadata),
-            "scenes_data": json.dumps(scenes) if scenes else None,
-            "indexed_at": datetime.utcnow().isoformat()
-        }
-        
-        # Insert or update asset
-        if existing_asset:
+        if existing:
             # Update existing asset
-            update_query = """
+            await db.execute("""
                 UPDATE so_assets SET
-                    file_size = ?, file_hash = ?, file_mtime = ?,
-                    duration = ?, width = ?, height = ?, fps = ?,
-                    video_codec = ?, audio_codec = ?, bitrate = ?,
-                    metadata = ?, scenes_data = ?, indexed_at = ?
+                    size = ?, mtime = ?, ctime = ?,
+                    hash_xxh64 = ?,
+                    duration_sec = ?, video_codec = ?, audio_codec = ?, 
+                    width = ?, height = ?, fps = ?, container = ?,
+                    streams_json = ?, status = ?, updated_at = ?
                 WHERE id = ?
-            """
-            
-            update_params = [
-                asset_data["file_size"], asset_data["file_hash"], asset_data["file_mtime"],
-                asset_data["duration"], asset_data["width"], asset_data["height"], asset_data["fps"],
-                asset_data["video_codec"], asset_data["audio_codec"], asset_data["bitrate"],
-                asset_data["metadata"], asset_data["scenes_data"], asset_data["indexed_at"],
-                existing_asset["id"]
-            ]
-            
-            await db.execute(update_query, update_params)
-            asset_id = existing_asset["id"]
+            """, (
+                file_size, file_mtime, file_ctime,
+                file_hash,
+                media_info.get("duration"),
+                media_info.get("video_codec"),
+                media_info.get("audio_codec"),
+                media_info.get("width"),
+                media_info.get("height"),
+                media_info.get("fps"),
+                media_info.get("container"),
+                json.dumps(media_info.get("streams", [])),
+                "completed",
+                now,
+                asset_id
+            ))
             action = "updated"
-            
         else:
             # Insert new asset
-            insert_query = """
+            await db.execute("""
                 INSERT INTO so_assets (
-                    file_path, file_name, file_size, file_hash, file_mtime,
-                    duration, width, height, fps, video_codec, audio_codec,
-                    bitrate, metadata, scenes_data, indexed_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """
-            
-            insert_params = [
-                asset_data["file_path"], asset_data["file_name"], asset_data["file_size"],
-                asset_data["file_hash"], asset_data["file_mtime"], asset_data["duration"],
-                asset_data["width"], asset_data["height"], asset_data["fps"],
-                asset_data["video_codec"], asset_data["audio_codec"], asset_data["bitrate"],
-                asset_data["metadata"], asset_data["scenes_data"], asset_data["indexed_at"]
-            ]
-            
-            cursor = await db.execute(insert_query, insert_params)
-            asset_id = cursor.lastrowid
+                    id, abs_path, drive_hint, size, mtime, ctime,
+                    hash_xxh64, duration_sec, video_codec, audio_codec, 
+                    width, height, fps, container,
+                    streams_json, tags_json, status,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                asset_id, file_path, data.get("drive", ""), 
+                file_size, file_mtime, file_ctime,
+                file_hash,
+                media_info.get("duration"),
+                media_info.get("video_codec"),
+                media_info.get("audio_codec"),
+                media_info.get("width"),
+                media_info.get("height"),
+                media_info.get("fps"),
+                media_info.get("container"),
+                json.dumps(media_info.get("streams", [])),
+                json.dumps([]),  # Empty tags for now
+                "completed",
+                now, now
+            ))
             action = "created"
         
         await db.commit()
         
-        # Update full-text search index
+        # Notify about new asset via SSE
+        if action == "created":
+            try:
+                # Import the broadcast function from events router
+                from app.api.routers.events import notify_new_asset
+                # Fire and forget the notification
+                asyncio.create_task(notify_new_asset(asset_id, file_path))
+                logger.info(f"Notified clients about new asset: {asset_id}")
+            except Exception as e:
+                logger.debug(f"Could not notify about new asset: {e}")
+        
+        logger.info(f"Successfully {action} asset: {file_path} as {asset_id}")
+        return {"success": True, "asset_id": asset_id, "action": action}
+    
+    async def _get_media_info(self, file_path: str) -> Dict[str, Any]:
+        """Extract media info using ffprobe"""
         try:
-            fts_query = """
-                INSERT OR REPLACE INTO so_assets_fts (
-                    rowid, file_name, file_path, metadata_text
-                ) VALUES (?, ?, ?, ?)
-            """
+            cmd = [
+                "ffprobe", "-v", "quiet", "-print_format", "json",
+                "-show_format", "-show_streams", file_path
+            ]
             
-            # Create searchable text from metadata
-            searchable_text = " ".join([
-                asset_data["file_name"],
-                str(metadata.get("title", "")),
-                str(metadata.get("comment", "")),
-                str(metadata.get("creation_time", ""))
-            ])
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await proc.communicate()
             
-            await db.execute(fts_query, [asset_id, asset_data["file_name"], asset_data["file_path"], searchable_text])
-            await db.commit()
+            if proc.returncode != 0:
+                logger.warning(f"ffprobe failed for {file_path}: {stderr.decode()}")
+                return {}
+            
+            data = json.loads(stdout)
+            
+            # Extract key info
+            info = {}
+            
+            # Get format info
+            if "format" in data:
+                fmt = data["format"]
+                info["duration"] = float(fmt.get("duration", 0))
+                info["container"] = fmt.get("format_name", "").split(",")[0]
+                info["size"] = int(fmt.get("size", 0))
+            
+            # Get stream info
+            info["streams"] = []
+            for stream in data.get("streams", []):
+                stream_info = {
+                    "index": stream.get("index"),
+                    "codec_type": stream.get("codec_type"),
+                    "codec_name": stream.get("codec_name")
+                }
+                
+                if stream.get("codec_type") == "video" and not info.get("video_codec"):
+                    info["video_codec"] = stream.get("codec_name")
+                    info["width"] = stream.get("width")
+                    info["height"] = stream.get("height")
+                    
+                    # Calculate FPS
+                    if stream.get("r_frame_rate"):
+                        try:
+                            num, den = stream["r_frame_rate"].split("/")
+                            info["fps"] = float(num) / float(den) if float(den) != 0 else 0
+                        except:
+                            pass
+                
+                elif stream.get("codec_type") == "audio" and not info.get("audio_codec"):
+                    info["audio_codec"] = stream.get("codec_name")
+                
+                info["streams"].append(stream_info)
+            
+            return info
             
         except Exception as e:
-            logger.warning(f"Failed to update FTS index: {e}")
-        
-        await self.update_progress(job_id, 100, "completed")
-        
-        logger.info(f"Successfully indexed asset {asset_id}: {file_path}")
-        
-        return {
-            "success": True,
-            "asset_id": asset_id,
-            "action": action,
-            "file_path": file_path,
-            "file_size": file_size,
-            "duration": metadata.get("duration"),
-            "resolution": f"{metadata.get('width', 0)}x{metadata.get('height', 0)}" if metadata.get('width') else None,
-            "video_codec": metadata.get("video_codec"),
-            "audio_codec": metadata.get("audio_codec"),
-            "scenes_count": len(scenes) if scenes else 0
-        }
-    
-    async def calculate_file_hash(self, file_path: str) -> str:
-        """Calculate SHA-256 hash of file"""
-        hash_sha256 = hashlib.sha256()
-        
-        # For large files, only hash first and last chunks for performance
-        file_size = os.path.getsize(file_path)
-        chunk_size = 64 * 1024  # 64KB chunks
-        
-        with open(file_path, "rb") as f:
-            if file_size > 100 * 1024 * 1024:  # Files larger than 100MB
-                # Hash first chunk
-                chunk = f.read(chunk_size)
-                hash_sha256.update(chunk)
-                
-                # Hash middle chunk
-                f.seek(file_size // 2)
-                chunk = f.read(chunk_size)
-                hash_sha256.update(chunk)
-                
-                # Hash last chunk
-                f.seek(-chunk_size, 2)
-                chunk = f.read(chunk_size)
-                hash_sha256.update(chunk)
-                
-            else:
-                # Hash entire file for smaller files
-                while chunk := f.read(chunk_size):
-                    hash_sha256.update(chunk)
-        
-        return hash_sha256.hexdigest()
-    
-    async def extract_media_metadata(self, file_path: str) -> Dict[str, Any]:
-        """Extract media metadata using FFprobe"""
-        cmd = [
-            "ffprobe",
-            "-v", "quiet",
-            "-print_format", "json",
-            "-show_format",
-            "-show_streams",
-            file_path
-        ]
-        
-        returncode, stdout, stderr = await self.run_command(cmd)
-        if returncode != 0:
-            logger.warning(f"FFprobe failed for {file_path}: {stderr}")
+            logger.error(f"Failed to get media info for {file_path}: {e}")
             return {}
-        
+    
+    async def _calculate_quick_hash(self, file_path: str, sample_size: int = 65536) -> Optional[str]:
+        """Calculate a quick xxhash of the file (first 64KB by default)"""
         try:
-            probe_data = json.loads(stdout)
-        except json.JSONDecodeError:
-            logger.warning(f"Failed to parse FFprobe output for {file_path}")
-            return {}
-        
-        metadata = {}
-        
-        # Extract format information
-        format_info = probe_data.get("format", {})
-        metadata.update({
-            "duration": float(format_info.get("duration", 0)) if format_info.get("duration") else None,
-            "bitrate": int(format_info.get("bit_rate", 0)) if format_info.get("bit_rate") else None,
-            "format_name": format_info.get("format_name"),
-            "format_long_name": format_info.get("format_long_name")
-        })
-        
-        # Extract format tags
-        format_tags = format_info.get("tags", {})
-        for key, value in format_tags.items():
-            metadata[f"tag_{key.lower()}"] = value
-        
-        # Extract stream information
-        streams = probe_data.get("streams", [])
-        video_stream = None
-        audio_streams = []
-        
-        for stream in streams:
-            if stream.get("codec_type") == "video":
-                video_stream = stream
-            elif stream.get("codec_type") == "audio":
-                audio_streams.append(stream)
-        
-        # Video stream metadata
-        if video_stream:
-            metadata.update({
-                "width": video_stream.get("width"),
-                "height": video_stream.get("height"),
-                "fps": self.parse_fps(video_stream.get("r_frame_rate")),
-                "video_codec": video_stream.get("codec_name"),
-                "video_profile": video_stream.get("profile"),
-                "pixel_format": video_stream.get("pix_fmt"),
-                "aspect_ratio": video_stream.get("display_aspect_ratio")
-            })
-        
-        # Audio stream metadata (first stream)
-        if audio_streams:
-            audio_stream = audio_streams[0]
-            metadata.update({
-                "audio_codec": audio_stream.get("codec_name"),
-                "sample_rate": audio_stream.get("sample_rate"),
-                "channels": audio_stream.get("channels"),
-                "channel_layout": audio_stream.get("channel_layout")
-            })
+            import xxhash
             
-            # Include info about all audio streams
-            metadata["audio_streams_count"] = len(audio_streams)
-        
-        return metadata
-    
-    async def extract_additional_metadata(self, file_path: str, existing_metadata: Dict[str, Any]) -> Dict[str, Any]:
-        """Extract additional metadata like file type classification"""
-        path = Path(file_path)
-        
-        additional = {
-            "file_extension": path.suffix.lower(),
-            "is_video": self.is_video_file(file_path),
-            "is_audio": self.is_audio_file(file_path),
-            "is_image": self.is_image_file(file_path)
-        }
-        
-        # Classify content type
-        if additional["is_video"]:
-            additional["content_type"] = "video"
-        elif additional["is_audio"]:
-            additional["content_type"] = "audio"
-        elif additional["is_image"]:
-            additional["content_type"] = "image"
-        else:
-            additional["content_type"] = "unknown"
-        
-        # Estimate quality category based on resolution
-        if existing_metadata.get("width") and existing_metadata.get("height"):
-            width = existing_metadata["width"]
-            height = existing_metadata["height"]
+            x = xxhash.xxh64()
+            with open(file_path, 'rb') as f:
+                # Read first chunk for quick hash
+                chunk = f.read(sample_size)
+                if chunk:
+                    x.update(chunk)
             
-            if height >= 2160:
-                additional["quality_category"] = "4k"
-            elif height >= 1080:
-                additional["quality_category"] = "hd"
-            elif height >= 720:
-                additional["quality_category"] = "hd"
-            else:
-                additional["quality_category"] = "sd"
-        
-        return additional
-    
-    async def extract_scene_data(self, file_path: str) -> list:
-        """Extract scene detection data (simplified version)"""
-        # This is a simplified scene detection - in production you'd use PySceneDetect
-        cmd = [
-            "ffprobe",
-            "-f", "lavfi",
-            "-i", f"movie={file_path},select=gt(scene\\,0.3)",
-            "-show_entries", "frame=pkt_pts_time",
-            "-of", "csv=p=0",
-            "-v", "quiet"
-        ]
-        
-        returncode, stdout, stderr = await self.run_command(cmd)
-        if returncode != 0:
-            return []
-        
-        scene_times = []
-        for line in stdout.strip().split('\n'):
-            if line:
-                try:
-                    time_val = float(line)
-                    scene_times.append({"time": time_val, "type": "cut"})
-                except ValueError:
-                    continue
-        
-        return scene_times[:50]  # Limit to 50 scenes
-    
-    def is_video_file(self, file_path: str) -> bool:
-        """Check if file is a video file"""
-        video_extensions = {'.mp4', '.mov', '.avi', '.mkv', '.wmv', '.flv', '.webm', '.m4v', '.mpg', '.mpeg'}
-        return Path(file_path).suffix.lower() in video_extensions
-    
-    def is_audio_file(self, file_path: str) -> bool:
-        """Check if file is an audio file"""
-        audio_extensions = {'.mp3', '.wav', '.flac', '.aac', '.ogg', '.m4a', '.wma'}
-        return Path(file_path).suffix.lower() in audio_extensions
-    
-    def is_image_file(self, file_path: str) -> bool:
-        """Check if file is an image file"""
-        image_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp'}
-        return Path(file_path).suffix.lower() in image_extensions
-    
-    def parse_fps(self, fps_str) -> float:
-        """Parse FPS from fraction string"""
-        if not fps_str:
+            return x.hexdigest()
+            
+        except ImportError:
+            logger.warning("xxhash not available, skipping quick hash")
             return None
-        
+        except Exception as e:
+            logger.error(f"Failed to calculate hash for {file_path}: {e}")
+            return None
+    
+    async def _calculate_full_hash(self, file_path: str) -> Optional[str]:
+        """Calculate full SHA256 hash of the file (for future use)"""
         try:
-            if '/' in fps_str:
-                num, den = fps_str.split('/')
-                return round(float(num) / float(den), 2)
-            return float(fps_str)
-        except:
+            import hashlib
+            
+            sha256 = hashlib.sha256()
+            with open(file_path, 'rb') as f:
+                # Read in chunks to handle large files
+                while chunk := f.read(8192):
+                    sha256.update(chunk)
+            
+            return sha256.hexdigest()
+            
+        except Exception as e:
+            logger.error(f"Failed to calculate SHA256 for {file_path}: {e}")
             return None

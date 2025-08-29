@@ -7,7 +7,7 @@ import os
 import logging
 from pathlib import Path
 
-from app.api.routers import health, config, assets, jobs, rules, overlays, reports, drives, system, wizard, websocket, settings, guardrails, filesystem, obs
+from app.api.routers import health, config, assets, jobs, rules, overlays, reports, drives, system, wizard, websocket, settings, guardrails, filesystem, obs, events
 from app.api.db.database import init_db, close_db, get_db
 from app.api.services.nats_service import NATSService
 from app.api.services.config_service import ConfigService
@@ -170,6 +170,7 @@ app.include_router(system.router, prefix="/api/system", tags=["system"])
 app.include_router(wizard.router, prefix="/api/wizard", tags=["wizard"])
 app.include_router(settings.router, prefix="/api", tags=["settings"])
 app.include_router(obs.router, tags=["obs"])  # No prefix, it's already in the router
+app.include_router(events.router, tags=["events"])
 
 # Main WebSocket endpoint for UI updates
 import asyncio

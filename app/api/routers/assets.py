@@ -405,17 +405,80 @@ async def get_asset_stats(
         raise HTTPException(status_code=500, detail=f"Failed to get asset stats: {str(e)}")
 
 
+@router.post("/scan/recording")
+async def scan_recording_folders(
+    db=Depends(get_db)
+) -> Dict[str, Any]:
+    """Manually trigger scan of recording folders for new assets"""
+    try:
+        # Get recording folder paths
+        cursor = await db.execute(
+            "SELECT abs_path FROM so_roles WHERE role = 'recording'"
+        )
+        rows = await cursor.fetchall()
+        
+        if not rows:
+            return {"status": "error", "message": "No recording folders configured"}
+        
+        scanned_count = 0
+        indexed_count = 0
+        
+        for row in rows:
+            recording_path = row[0]
+            logger.info(f"Scanning recording folder: {recording_path}")
+            
+            # Import and use DriveWatcher to scan
+            from app.worker.watchers.drive_watcher import DriveWatcher
+            
+            # Try to get NATS service from app state
+            nats = None
+            try:
+                from app.api.main import app
+                if hasattr(app.state, 'nats'):
+                    nats = app.state.nats
+                    logger.info("Using NATS service from app state")
+            except Exception as e:
+                logger.warning(f"NATS not available, will index directly: {e}")
+            
+            watcher = DriveWatcher(recording_path, nats)
+            # Note: scan_existing will queue index jobs for unindexed files
+            await watcher.scan_existing()
+            scanned_count += 1
+        
+        return {
+            "status": "success",
+            "message": f"Scanned {scanned_count} recording folder(s)",
+            "folders_scanned": scanned_count
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to scan recording folders: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to scan: {str(e)}")
+
+
 @router.get("/recent")
 async def get_recent_assets(
     limit: int = Query(10, ge=1, le=100, description="Number of recent assets to return"),
     db=Depends(get_db)
 ) -> List[AssetResponse]:
-    """Get recently added video assets only"""
+    """Get recently added video assets from recording folders only"""
     try:
-        # Filter for video files by extension
+        # First get recording folder path
+        recording_cursor = await db.execute(
+            "SELECT abs_path FROM so_roles WHERE role = 'recording'"
+        )
+        recording_row = await recording_cursor.fetchone()
+        
+        if not recording_row:
+            # No recording folder configured
+            return []
+            
+        recording_path = recording_row[0]
+        
+        # Filter for video files in recording folder by extension
         cursor = await db.execute(
             """SELECT * FROM so_assets 
-               WHERE (
+               WHERE abs_path LIKE ? AND (
                    abs_path LIKE '%.mp4' OR 
                    abs_path LIKE '%.mov' OR 
                    abs_path LIKE '%.mkv' OR 
@@ -431,7 +494,7 @@ async def get_recent_assets(
                )
                ORDER BY created_at DESC 
                LIMIT ?""",
-            (limit,)
+            (f"{recording_path}%", limit,)
         )
         rows = await cursor.fetchall()
         

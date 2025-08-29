@@ -363,9 +363,10 @@ export default function AssetPreviewDrawer({ assetId, onClose, onAction }) {
                         <div className="flex justify-between text-sm">
                           <span className="text-muted-foreground">Status</span>
                           <Badge variant={
-                            asset.status === 'indexed' ? 'success' :
+                            asset.status === 'completed' ? 'success' :
                             asset.status === 'pending' ? 'warning' :
-                            asset.status === 'failed' ? 'destructive' :
+                            asset.status === 'error' ? 'destructive' :
+                            asset.status === 'processing' ? 'outline' :
                             'secondary'
                           }>
                             {asset.status}

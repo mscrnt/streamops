@@ -63,6 +63,9 @@ class DriveWatcher:
         
         self.running = True
         
+        # Scan existing files on startup
+        await self.scan_existing()
+        
         # Start file stability checker
         asyncio.create_task(self._check_file_stability())
         
@@ -167,11 +170,16 @@ class DriveWatcher:
         # Generate job ID
         job_id = self._generate_job_id(file_path)
         
-        # Create job data
+        # Create job data in the format expected by IndexJob
         job_data = {
             "id": job_id,
-            "input_path": file_path,
-            "drive": str(self.path)
+            "type": "index",
+            "data": {
+                "file_path": file_path,
+                "drive": str(self.path),
+                "force_reindex": False,
+                "extract_scenes": False
+            }
         }
         
         # Publish job

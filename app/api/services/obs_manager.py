@@ -146,6 +146,28 @@ class OBSClient:
                 "error": str(e)
             }
     
+    async def refresh_status(self) -> bool:
+        """Refresh current recording/streaming status from OBS"""
+        if not self.connected or not self.client:
+            return False
+        
+        try:
+            loop = asyncio.get_event_loop()
+            
+            def _get_status():
+                record_status = self.client.get_record_status()
+                stream_status = self.client.get_stream_status()
+                scene = self.client.get_current_program_scene()
+                return record_status.output_active, stream_status.output_active, scene.scene_name
+            
+            self.recording, self.streaming, self.current_scene = await loop.run_in_executor(None, _get_status)
+            self.last_seen = datetime.utcnow()
+            logger.debug(f"[{self.name}] Status refreshed - Recording: {self.recording}, Streaming: {self.streaming}")
+            return True
+        except Exception as e:
+            logger.error(f"[{self.name}] Failed to refresh status: {e}")
+            return False
+    
     def get_status(self) -> Dict[str, Any]:
         """Get current client status"""
         return {
@@ -166,9 +188,9 @@ class OBSManager:
     def __init__(self, nats_service=None):
         self.nats = nats_service
         self.clients: Dict[str, OBSClient] = {}
-        self.quiet_period_sec = int(os.getenv("OBS_QUIET_PERIOD", "45"))
         self._running = False
         self._event_task = None
+        self._polling_task = None
         
     async def load_all(self):
         """Load all enabled OBS connections from database"""
@@ -203,6 +225,8 @@ class OBSManager:
             if await client.connect():
                 await self._update_status(client)
                 await self._setup_event_handlers(client)
+                # Start polling for this client
+                asyncio.create_task(self._start_polling(client))
                 return
             await asyncio.sleep(5 * (attempt + 1))  # Exponential backoff
         
@@ -248,33 +272,15 @@ class OBSManager:
             client.recording = data.output_active
             client.last_seen = datetime.utcnow()
             
-            event_type = "recording_started" if data.output_active else "recording_stopped"
+            if data.output_active:
+                # Recording started
+                logger.info(f"[{client.name}] Recording started (via event)")
+                await self._handle_recording_started(client)
+            else:
+                # Recording stopped
+                logger.info(f"[{client.name}] Recording stopped (via event)")
+                await self._handle_recording_stopped(client)
             
-            # Emit event
-            event_data = {
-                "connection_id": client.connection_id,
-                "connection_name": client.name,
-                "timestamp": datetime.utcnow().isoformat(),
-                "scene": client.current_scene,
-                "state": "recording" if data.output_active else "idle"
-            }
-            
-            if self.nats:
-                await self.nats.publish(f"events.obs.{event_type}", json.dumps(event_data))
-            
-            # If recording stopped, schedule safe processing time
-            if not data.output_active:
-                safe_time = datetime.utcnow() + timedelta(seconds=self.quiet_period_sec)
-                safe_event = {
-                    "connection_id": client.connection_id,
-                    "connection_name": client.name,
-                    "safe_to_process_at": safe_time.isoformat()
-                }
-                
-                # Schedule delayed safe processing event
-                asyncio.create_task(self._emit_safe_process(safe_event, self.quiet_period_sec))
-            
-            logger.info(f"[{client.name}] Recording {event_type}")
             await self._update_status(client)
             
         except Exception as e:
@@ -286,21 +292,13 @@ class OBSManager:
             client.streaming = data.output_active
             client.last_seen = datetime.utcnow()
             
-            event_type = "streaming_started" if data.output_active else "streaming_stopped"
+            if data.output_active:
+                logger.info(f"[{client.name}] Streaming started (via event)")
+                await self._handle_streaming_started(client)
+            else:
+                logger.info(f"[{client.name}] Streaming stopped (via event)")
+                await self._handle_streaming_stopped(client)
             
-            # Emit event
-            event_data = {
-                "connection_id": client.connection_id,
-                "connection_name": client.name,
-                "timestamp": datetime.utcnow().isoformat(),
-                "scene": client.current_scene,
-                "state": "streaming" if data.output_active else "idle"
-            }
-            
-            if self.nats:
-                await self.nats.publish(f"events.obs.{event_type}", json.dumps(event_data))
-            
-            logger.info(f"[{client.name}] Streaming {event_type}")
             await self._update_status(client)
             
         except Exception as e:
@@ -329,12 +327,169 @@ class OBSManager:
         except Exception as e:
             logger.error(f"Error handling scene change for {client.name}: {e}")
     
-    async def _emit_safe_process(self, event: Dict, delay_sec: int):
-        """Emit safe processing event after delay"""
-        await asyncio.sleep(delay_sec)
-        if self.nats:
-            await self.nats.publish("events.obs.safe_process", json.dumps(event))
-        logger.info(f"Safe to process files from {event['connection_name']}")
+    
+    async def _start_polling(self, client: OBSClient):
+        """Start polling for a specific client's status"""
+        logger.info(f"Starting status polling for {client.name}")
+        
+        # Track previous states to detect changes
+        prev_recording = client.recording
+        prev_streaming = client.streaming
+        
+        while client.connected:
+            try:
+                await asyncio.sleep(5)  # Poll every 5 seconds
+                if client.connected:
+                    # Store previous states before refresh
+                    prev_recording = client.recording
+                    prev_streaming = client.streaming
+                    
+                    # Refresh status from OBS
+                    await client.refresh_status()
+                    
+                    # Check if recording state changed
+                    if prev_recording and not client.recording:
+                        logger.info(f"[{client.name}] Recording stopped (detected via polling)")
+                        await self._handle_recording_stopped(client)
+                    elif not prev_recording and client.recording:
+                        logger.info(f"[{client.name}] Recording started (detected via polling)")
+                        await self._handle_recording_started(client)
+                    
+                    # Check if streaming state changed
+                    if prev_streaming and not client.streaming:
+                        logger.info(f"[{client.name}] Streaming stopped (detected via polling)")
+                        await self._handle_streaming_stopped(client)
+                    elif not prev_streaming and client.streaming:
+                        logger.info(f"[{client.name}] Streaming started (detected via polling)")
+                        await self._handle_streaming_started(client)
+                    
+                    # Update database with current status
+                    await self._update_status(client)
+            except Exception as e:
+                logger.error(f"Error polling status for {client.name}: {e}")
+                # Continue polling even on error
+        logger.info(f"Stopped polling for {client.name}")
+    
+    async def _handle_recording_started(self, client: OBSClient):
+        """Handle when recording starts - common logic for events and polling"""
+        try:
+            # Emit event if NATS is available
+            event_data = {
+                "connection_id": client.connection_id,
+                "connection_name": client.name,
+                "timestamp": datetime.utcnow().isoformat(),
+                "scene": client.current_scene,
+                "state": "recording"
+            }
+            
+            if self.nats:
+                await self.nats.publish_event("obs.recording_started", event_data)
+            
+            # Broadcast SSE event for immediate UI update
+            from app.api.routers.events import notify_recording_state
+            asyncio.create_task(notify_recording_state(True, client.name))
+            
+            logger.info(f"Recording started for {client.name}")
+            
+        except Exception as e:
+            logger.error(f"Failed to handle recording started: {e}")
+    
+    async def _handle_streaming_started(self, client: OBSClient):
+        """Handle when streaming starts - common logic for events and polling"""
+        try:
+            # Emit event if NATS is available
+            event_data = {
+                "connection_id": client.connection_id,
+                "connection_name": client.name,
+                "timestamp": datetime.utcnow().isoformat(),
+                "scene": client.current_scene,
+                "state": "streaming"
+            }
+            
+            if self.nats:
+                await self.nats.publish_event("obs.streaming_started", event_data)
+            
+            # Broadcast SSE event for immediate UI update
+            from app.api.routers.events import notify_recording_state
+            asyncio.create_task(notify_recording_state(True, client.name))
+            
+            logger.info(f"Streaming started for {client.name}")
+            
+        except Exception as e:
+            logger.error(f"Failed to handle streaming started: {e}")
+    
+    async def _handle_streaming_stopped(self, client: OBSClient):
+        """Handle when streaming stops - common logic for events and polling"""
+        try:
+            # Emit event if NATS is available
+            event_data = {
+                "connection_id": client.connection_id,
+                "connection_name": client.name,
+                "timestamp": datetime.utcnow().isoformat(),
+                "scene": client.current_scene,
+                "state": "idle"
+            }
+            
+            if self.nats:
+                await self.nats.publish_event("obs.streaming_stopped", event_data)
+            
+            # Broadcast SSE event for immediate UI update
+            from app.api.routers.events import notify_recording_state
+            asyncio.create_task(notify_recording_state(False, client.name))
+            
+            logger.info(f"Streaming stopped for {client.name}")
+            
+        except Exception as e:
+            logger.error(f"Failed to handle streaming stopped: {e}")
+    
+    async def _handle_recording_stopped(self, client: OBSClient):
+        """Handle when recording stops - common logic for events and polling"""
+        try:
+            # Emit event if NATS is available
+            event_data = {
+                "connection_id": client.connection_id,
+                "connection_name": client.name,
+                "timestamp": datetime.utcnow().isoformat(),
+                "scene": client.current_scene,
+                "state": "idle"
+            }
+            
+            if self.nats:
+                await self.nats.publish_event("obs.recording_stopped", event_data)
+            
+            # Broadcast SSE event for immediate UI update
+            from app.api.routers.events import notify_recording_state
+            asyncio.create_task(notify_recording_state(False, client.name))
+            
+            # Scan immediately - OBS recordings are complete when stopped
+            logger.info(f"Recording stopped for {client.name}, scanning for new files immediately")
+            asyncio.create_task(self._trigger_recording_scan())
+            
+        except Exception as e:
+            logger.error(f"Failed to handle recording stopped: {e}")
+    
+    
+    async def _trigger_recording_scan(self):
+        """Trigger scan of recording folders after recording stops"""
+        try:
+            db = await get_db()
+            # Get recording folder paths
+            cursor = await db.execute(
+                "SELECT abs_path FROM so_roles WHERE role = 'recording'"
+            )
+            rows = await cursor.fetchall()
+            
+            for row in rows:
+                recording_path = row[0]
+                logger.info(f"Triggering scan of recording folder: {recording_path}")
+                
+                # Import and use DriveWatcher to scan
+                from app.worker.watchers.drive_watcher import DriveWatcher
+                watcher = DriveWatcher(recording_path, self.nats)
+                await watcher.scan_existing()
+                
+        except Exception as e:
+            logger.error(f"Failed to trigger recording scan: {e}")
     
     async def _update_status(self, client: OBSClient):
         """Update client status in database"""
@@ -385,6 +540,8 @@ class OBSManager:
         success = await client.connect()
         if success:
             await self._setup_event_handlers(client)
+            # Start polling for this client
+            asyncio.create_task(self._start_polling(client))
         await self._update_status(client)
         return success
     
