@@ -246,7 +246,7 @@ async def create_drive_watch(
 
 @router.get("/status")
 async def get_drives_status(db=Depends(get_db)) -> List[Dict[str, Any]]:
-    """Get status of all drives for dashboard - based on role assignments"""
+    """Get status of all drives for dashboard - includes detailed role information"""
     try:
         # Get role assignments with their paths
         cursor = await db.execute("""
@@ -261,7 +261,25 @@ async def get_drives_status(db=Depends(get_db)) -> List[Dict[str, Any]]:
         
         # Group by unique drive paths (extract root drive from abs_path)
         drives_map = {}
+        role_details = []  # Store role details separately
+        
         for role, drive_id, abs_path, watch in roles_rows:
+            # Get asset count for this role's path
+            cursor = await db.execute("""
+                SELECT COUNT(*) FROM so_assets 
+                WHERE abs_path LIKE ? || '%'
+            """, (abs_path,))
+            asset_count = (await cursor.fetchone())[0]
+            
+            # Store role details
+            role_detail = {
+                "role": role,
+                "path": abs_path,
+                "asset_count": asset_count,
+                "watching": watch
+            }
+            role_details.append(role_detail)
+            
             # Extract drive identifier from path
             if abs_path.startswith("/mnt/"):
                 # Extract drive mount point
@@ -276,10 +294,14 @@ async def get_drives_status(db=Depends(get_db)) -> List[Dict[str, Any]]:
                             "path": drive_key,
                             "label": f"Drive {parts[2].replace('drive_', '').upper()}",
                             "roles": [],
-                            "watching": False
+                            "role_details": [],
+                            "watching": False,
+                            "total_assets": 0
                         }
                     
                     drives_map[drive_key]["roles"].append(role)
+                    drives_map[drive_key]["role_details"].append(role_detail)
+                    drives_map[drive_key]["total_assets"] += asset_count
                     if watch:
                         drives_map[drive_key]["watching"] = True
         
@@ -332,10 +354,13 @@ async def get_drives_status(db=Depends(get_db)) -> List[Dict[str, Any]]:
                 "id": drive_info["id"],
                 "label": drive_info["label"],
                 "path": path,
-                "role": ", ".join(drive_info["roles"]),
+                "roles": drive_info["roles"],
+                "role_details": drive_info["role_details"],
+                "total_assets": drive_info["total_assets"],
                 "total": total,
                 "free": free,
                 "rw": rw,
+                "watching": drive_info["watching"],
                 "watcher": watcher_status,
                 "last_event_at": None,  # Would come from stats if we had them
                 "health": health
