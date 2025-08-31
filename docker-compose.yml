@@ -19,6 +19,9 @@ services:
       - ./app/worker:/opt/streamops/app/worker:ro
       - ./app/overlay:/opt/streamops/app/overlay:ro
       
+      # Mount UI build directory for instant updates after npm run build
+      - ./app/ui/dist:/opt/streamops/app/static:ro
+      
       # Configurable drive mounts (up to 3 roots)
       # Mount 1 - Primary drive
       - ${SO_MOUNT_1_HOST:-/mnt/d}:${SO_MOUNT_1_PATH:-/mnt/drive_d}:rw
@@ -32,7 +35,7 @@ services:
     environment:
       - ROLE=all
       - NATS_ENABLE=true
-      - LOG_LEVEL=debug
+      - LOG_LEVEL=info
       
       # Mount configuration
       - SO_MOUNT_1_PATH=${SO_MOUNT_1_PATH:-/mnt/drive_d}

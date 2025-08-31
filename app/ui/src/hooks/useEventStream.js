@@ -10,9 +10,9 @@ export function useEventStream() {
     
     switch (event.type) {
       case 'asset.created':
-        // New asset was created, invalidate recent assets
+        // New asset was created, invalidate all assets queries
         console.log('New asset created:', data.filepath);
-        queryClient.invalidateQueries(['assets', 'recent']);
+        queryClient.invalidateQueries(['assets']);
         toast.success(`New recording: ${data.filepath.split('/').pop()}`);
         break;
         
@@ -25,11 +25,15 @@ export function useEventStream() {
         
         if (!data.is_recording) {
           // Recording stopped, assets will be indexed soon
-          // The asset.created event will handle refreshing the assets list
-          toast.info('Recording stopped, processing new files...');
+          // Also invalidate assets since new recordings might appear
+          toast.success('Recording stopped, processing new files...');
+          // Trigger asset refresh after a short delay to allow indexing
+          setTimeout(() => {
+            queryClient.invalidateQueries(['assets']);
+          }, 2000);
         } else {
           // Recording started
-          toast.info('Recording started');
+          toast.success('Recording started');
         }
         break;
         
@@ -45,23 +49,45 @@ export function useEventStream() {
   useEffect(() => {
     let eventSource = null;
     let reconnectTimeout = null;
+    let reconnectAttempts = 0;
+    const maxReconnectAttempts = 10;
 
     const connect = () => {
-      console.log('Connecting to event stream...');
+      console.log(`Connecting to event stream... (attempt ${reconnectAttempts + 1})`);
+      
+      // Clear any existing connection
+      if (eventSource) {
+        eventSource.close();
+      }
+      
       eventSource = new EventSource('/api/events/stream');
 
       eventSource.onopen = () => {
         console.log('Connected to event stream');
+        reconnectAttempts = 0; // Reset attempts on successful connection
       };
 
       eventSource.onerror = (error) => {
         console.error('EventSource error:', error);
+        
+        // Don't reconnect if we're cleaning up
+        if (eventSource.readyState === EventSource.CLOSED) {
+          return;
+        }
+        
         eventSource.close();
         
-        // Reconnect after 5 seconds
-        reconnectTimeout = setTimeout(() => {
-          connect();
-        }, 5000);
+        // Exponential backoff for reconnection
+        if (reconnectAttempts < maxReconnectAttempts) {
+          reconnectAttempts++;
+          const delay = Math.min(5000 * Math.pow(1.5, reconnectAttempts - 1), 30000);
+          console.log(`Reconnecting in ${delay}ms...`);
+          reconnectTimeout = setTimeout(() => {
+            connect();
+          }, delay);
+        } else {
+          console.error('Max reconnection attempts reached');
+        }
       };
 
       // Listen for specific events

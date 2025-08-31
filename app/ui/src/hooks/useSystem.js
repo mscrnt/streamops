@@ -1,6 +1,21 @@
 import { useQuery } from '@tanstack/react-query'
 import { useApi } from './useApi'
 
+// Main system summary hook (used by TopbarMetrics)
+export const useSystem = () => {
+  const { api } = useApi()
+  
+  return useQuery({
+    queryKey: ['system', 'summary'],
+    queryFn: async () => {
+      const response = await api.get('/system/summary')
+      return response.data
+    },
+    refetchInterval: 5000,
+    staleTime: 2000
+  })
+}
+
 // Get system stats
 export const useSystemStats = (refetchInterval = 5000) => {
   const { api } = useApi()

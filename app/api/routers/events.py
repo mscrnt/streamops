@@ -22,6 +22,8 @@ async def broadcast_event(event_type: str, data: dict):
         "timestamp": datetime.utcnow().isoformat()
     }
     
+    logger.info(f"Broadcasting {event_type} to {len(event_queues)} connected clients")
+    
     # Send to all connected clients
     for queue in event_queues:
         try:

@@ -132,6 +132,9 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# Ensure "no slash" and "slash" both resolve cleanly
+app.router.redirect_slashes = True
+
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
@@ -140,6 +143,26 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Cache headers middleware for proper caching policy
+@app.middleware("http")
+async def cache_headers(request: Request, call_next):
+    response = await call_next(request)
+    path = request.url.path
+    
+    # No cache for HTML and root
+    if path == "/" or path.endswith(".html"):
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    # Long cache for hashed assets
+    elif path.startswith("/assets/"):
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    # Default moderate cache for API responses
+    elif path.startswith("/api/"):
+        response.headers["Cache-Control"] = "private, max-age=0, must-revalidate"
+    
+    return response
 
 # Add exception handler middleware
 @app.exception_handler(Exception)

@@ -2,7 +2,7 @@ import { forwardRef } from 'react'
 import { cn } from '@/lib/utils'
 import { Loader2 } from 'lucide-react'
 
-const buttonVariants = {
+const buttonVariantStyles = {
   variant: {
     default: 'bg-primary text-primary-foreground hover:bg-primary/90',
     destructive: 'bg-destructive text-destructive-foreground hover:bg-destructive/90',
@@ -32,8 +32,8 @@ const Button = forwardRef(({
     <button
       className={cn(
         'inline-flex items-center justify-center rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50',
-        buttonVariants.variant[variant],
-        buttonVariants.size[size],
+        buttonVariantStyles.variant[variant],
+        buttonVariantStyles.size[size],
         className
       )}
       ref={ref}
@@ -50,4 +50,16 @@ const Button = forwardRef(({
 
 Button.displayName = 'Button'
 
+// Export as a function to match shadcn/ui pattern
+export function buttonVariants(props = {}) {
+  const variant = props.variant || 'default'
+  const size = props.size || 'default'
+  return cn(
+    'inline-flex items-center justify-center rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50',
+    buttonVariantStyles.variant[variant],
+    buttonVariantStyles.size[size]
+  )
+}
+
+export { Button }
 export default Button

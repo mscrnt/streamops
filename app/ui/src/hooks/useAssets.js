@@ -3,21 +3,25 @@ import { useStore, useAssetStore } from '@/store/useStore'
 import { useApi } from './useApi'
 import toast from 'react-hot-toast'
 
+// Helper to strip empty values from params
+const stripEmpty = (obj) =>
+  Object.fromEntries(Object.entries(obj).filter(([_, v]) => v !== undefined && v !== '' && v !== null))
+
 // Assets listing hook
-export const useAssets = (params = {}) => {
+export const useAssets = (passedParams = {}, { override = false } = {}) => {
   const { assetFilters } = useStore()
   const { api } = useApi()
 
-  // Merge filters with params
-  const queryParams = {
-    ...assetFilters,
-    ...params,
-  }
+  // Either use passed params only (override) or merge with store filters
+  const queryParams = stripEmpty(
+    override ? passedParams : { ...assetFilters, ...passedParams }
+  )
 
   return useQuery({
     queryKey: ['assets', queryParams],
     queryFn: async () => {
-      const response = await api.get('/assets', { params: queryParams })
+      // API requires trailing slash for list endpoints
+      const response = await api.get('/assets/', { params: queryParams })
       return response.data
     },
     staleTime: 30000, // Consider data stale after 30 seconds

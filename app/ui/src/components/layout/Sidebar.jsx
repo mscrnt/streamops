@@ -11,6 +11,8 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useStore } from '@/store/useStore'
+import QuickActionsGroup from '@/components/nav/QuickActionsGroup'
+import OBSControls from '@/components/nav/OBSControls'
 
 const navigation = [
   {
@@ -78,7 +80,7 @@ export default function Sidebar() {
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 px-2 py-4 space-y-1">
+      <nav className="flex-1 px-2 py-4 space-y-1 overflow-y-auto">
         {navigation.map((item) => {
           const Icon = item.icon
           return (
@@ -104,6 +106,18 @@ export default function Sidebar() {
             </NavLink>
           )
         })}
+        
+        {/* OBS Controls - only show when sidebar is expanded */}
+        {!sidebarCollapsed && (
+          <OBSControls />
+        )}
+        
+        {/* Quick Actions Group - only show when sidebar is expanded */}
+        {!sidebarCollapsed && (
+          <div className="mt-6 border-t pt-4">
+            <QuickActionsGroup />
+          </div>
+        )}
       </nav>
 
       {/* Footer */}

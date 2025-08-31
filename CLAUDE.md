@@ -44,24 +44,38 @@ Runtime data structure:
 
 ## Development Commands
 
-### Building the Container
+### Building and Running
 ```bash
-# Build the full image
+# Build the full Docker image
 docker build -t mscrnt/streamops:latest .
 
-# Development build with hot-reload
+# Run production container
+docker-compose up -d
+
+# Development mode with hot-reload
 docker-compose -f docker-compose.dev.yml up
+
+# Stop containers
+docker-compose down
 ```
 
-### Running Tests
+### Testing
 ```bash
-# Run Python tests
-pytest app/tests/
+# Run Python unit tests with coverage
+pytest
 
-# Run UI tests
+# Run specific test markers
+pytest -m unit
+pytest -m integration
+pytest -m api
+
+# Run UI unit tests
 cd app/ui && npm test
 
-# Golden media tests
+# Run E2E tests with Playwright
+npm test
+
+# Golden media pipeline tests
 python scripts/golden_tests.py
 ```
 
@@ -70,11 +84,17 @@ python scripts/golden_tests.py
 # API development (with hot reload)
 cd app && uvicorn api.main:app --reload --port 7767
 
-# UI development
+# UI development server
 cd app/ui && npm run dev
 
 # Worker development
 python -m app.worker.main
+
+# UI build for production
+npm run build
+
+# Lint JavaScript/React code
+npm run lint
 ```
 
 ## Database Schema
@@ -137,6 +157,42 @@ Volumes:
 - `/data`: Config, DB, logs, cache, thumbnails
 - `/mnt/drive_*`: Bind mounts to host drives
 
+## Tech Stack
+
+### Backend
+- **Python 3.11** with FastAPI for API
+- **SQLite** with FTS5 for full-text search
+- **NATS JetStream** for job queue
+- **FFmpeg** with NVIDIA CUDA support
+- **PySceneDetect** for scene detection
+- **Watchdog** for file system monitoring
+
+### Frontend  
+- **React 18** with Vite bundler
+- **TailwindCSS** for styling
+- **React Query** for API state management
+- **Zustand** for client state
+- **Monaco Editor** for YAML rule editing
+- **WaveSurfer.js** for audio waveforms
+- **Recharts** for metrics visualization
+
+### Testing
+- **Pytest** with asyncio for Python tests
+- **Vitest** for UI unit tests
+- **Playwright** for E2E tests
+
+## API Endpoints
+
+Key API routes:
+- `GET /api/assets` - List media assets with search/filtering
+- `POST /api/jobs` - Submit processing jobs
+- `GET /api/jobs/{id}` - Job status and logs
+- `GET /api/drives` - List monitored drives and status
+- `POST /api/rules` - Create/update automation rules
+- `GET /api/sessions` - OBS recording sessions
+- `WS /api/events` - Real-time event stream
+- `GET /api/system/stats` - CPU/GPU/memory metrics
+
 ## Testing Patterns
 
 - Use golden media set for pipeline verification
@@ -144,3 +200,22 @@ Volumes:
 - Verify GPU/CPU guardrails work correctly
 - Test OBS WebSocket events with mock server
 - Ensure idempotent job processing
+
+## Important Files
+
+- `/app/api/main.py` - FastAPI application entry
+- `/app/api/routers/` - API endpoint implementations
+- `/app/worker/main.py` - Job processor entry
+- `/app/worker/runners/` - Job execution logic
+- `/app/ui/src/App.jsx` - React app entry
+- `/app/pkg/s6/` - Service supervisor configs
+- `/scripts/golden_tests.py` - Media pipeline tests
+
+## Design Review Integration
+
+The project includes a design review workflow for maintaining UI/UX quality:
+- Design principles and examples in `/design-review/`
+- Automated design review templates for PRs
+- Standards-based evaluation covering accessibility, responsiveness, and visual hierarchy
+- See `/design-review/README.md` for implementation details
+- only use the tmux session 'streamops' for docker compose commands and never close it.

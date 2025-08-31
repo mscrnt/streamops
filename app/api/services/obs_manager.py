@@ -105,6 +105,54 @@ class OBSClient:
         except Exception as e:
             logger.error(f"[{self.name}] Error during disconnect: {e}")
     
+    async def start_recording(self):
+        """Start recording in OBS"""
+        if not self.client:
+            raise Exception("Not connected to OBS")
+        try:
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, self.client.start_record)
+            logger.info(f"[{self.name}] Started recording")
+        except Exception as e:
+            logger.error(f"[{self.name}] Failed to start recording: {e}")
+            raise
+    
+    async def stop_recording(self):
+        """Stop recording in OBS"""
+        if not self.client:
+            raise Exception("Not connected to OBS")
+        try:
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, self.client.stop_record)
+            logger.info(f"[{self.name}] Stopped recording")
+        except Exception as e:
+            logger.error(f"[{self.name}] Failed to stop recording: {e}")
+            raise
+    
+    async def start_streaming(self):
+        """Start streaming in OBS"""
+        if not self.client:
+            raise Exception("Not connected to OBS")
+        try:
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, self.client.start_stream)
+            logger.info(f"[{self.name}] Started streaming")
+        except Exception as e:
+            logger.error(f"[{self.name}] Failed to start streaming: {e}")
+            raise
+    
+    async def stop_streaming(self):
+        """Stop streaming in OBS"""
+        if not self.client:
+            raise Exception("Not connected to OBS")
+        try:
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, self.client.stop_stream)
+            logger.info(f"[{self.name}] Stopped streaming")
+        except Exception as e:
+            logger.error(f"[{self.name}] Failed to stop streaming: {e}")
+            raise
+    
     async def test_connection(self) -> Dict[str, Any]:
         """Test connection and return capabilities"""
         try:
@@ -386,8 +434,12 @@ class OBSManager:
                 await self.nats.publish_event("obs.recording_started", event_data)
             
             # Broadcast SSE event for immediate UI update
-            from app.api.routers.events import notify_recording_state
-            asyncio.create_task(notify_recording_state(True, client.name))
+            try:
+                from app.api.routers.events import notify_recording_state
+                await notify_recording_state(True, client.name)
+                logger.info(f"Sent recording started notification for {client.name}")
+            except Exception as e:
+                logger.error(f"Failed to send recording started notification: {e}")
             
             logger.info(f"Recording started for {client.name}")
             
@@ -458,8 +510,12 @@ class OBSManager:
                 await self.nats.publish_event("obs.recording_stopped", event_data)
             
             # Broadcast SSE event for immediate UI update
-            from app.api.routers.events import notify_recording_state
-            asyncio.create_task(notify_recording_state(False, client.name))
+            try:
+                from app.api.routers.events import notify_recording_state
+                await notify_recording_state(False, client.name)
+                logger.info(f"Sent recording stopped notification for {client.name}")
+            except Exception as e:
+                logger.error(f"Failed to send recording stopped notification: {e}")
             
             # Scan immediately - OBS recordings are complete when stopped
             logger.info(f"Recording stopped for {client.name}, scanning for new files immediately")

@@ -401,6 +401,146 @@ async def disconnect(
         logger.error(f"Failed to disconnect OBS: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.post("/clients/{client_name}/recording/start")
+async def start_recording(client_name: str):
+    """Start recording on an OBS instance"""
+    try:
+        manager = get_obs_manager()
+        # Find the connection by name
+        state = manager.get_state()
+        connection = None
+        for conn in state['connections']:
+            if conn['name'] == client_name:
+                connection = conn
+                break
+        
+        if not connection:
+            raise HTTPException(status_code=404, detail=f"OBS client '{client_name}' not found")
+        
+        if not connection.get('connected'):
+            raise HTTPException(status_code=400, detail=f"OBS client '{client_name}' is not connected")
+        
+        # Get the actual client from manager
+        if connection['connection_id'] not in manager.clients:
+            raise HTTPException(status_code=404, detail="Client connection not found")
+        
+        client = manager.clients[connection['connection_id']]
+        
+        # Start recording
+        await client.start_recording()
+        return {"success": True, "message": f"Recording started on {client_name}"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to start recording: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/clients/{client_name}/recording/stop")
+async def stop_recording(client_name: str):
+    """Stop recording on an OBS instance"""
+    try:
+        manager = get_obs_manager()
+        # Find the connection by name
+        state = manager.get_state()
+        connection = None
+        for conn in state['connections']:
+            if conn['name'] == client_name:
+                connection = conn
+                break
+        
+        if not connection:
+            raise HTTPException(status_code=404, detail=f"OBS client '{client_name}' not found")
+        
+        if not connection.get('connected'):
+            raise HTTPException(status_code=400, detail=f"OBS client '{client_name}' is not connected")
+        
+        # Get the actual client from manager
+        if connection['connection_id'] not in manager.clients:
+            raise HTTPException(status_code=404, detail="Client connection not found")
+        
+        client = manager.clients[connection['connection_id']]
+        
+        # Stop recording
+        await client.stop_recording()
+        return {"success": True, "message": f"Recording stopped on {client_name}"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to stop recording: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/clients/{client_name}/streaming/start")
+async def start_streaming(client_name: str):
+    """Start streaming on an OBS instance"""
+    try:
+        manager = get_obs_manager()
+        # Find the connection by name
+        state = manager.get_state()
+        connection = None
+        for conn in state['connections']:
+            if conn['name'] == client_name:
+                connection = conn
+                break
+        
+        if not connection:
+            raise HTTPException(status_code=404, detail=f"OBS client '{client_name}' not found")
+        
+        if not connection.get('connected'):
+            raise HTTPException(status_code=400, detail=f"OBS client '{client_name}' is not connected")
+        
+        # Get the actual client from manager
+        if connection['connection_id'] not in manager.clients:
+            raise HTTPException(status_code=404, detail="Client connection not found")
+        
+        client = manager.clients[connection['connection_id']]
+        
+        # Start streaming
+        await client.start_streaming()
+        return {"success": True, "message": f"Streaming started on {client_name}"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to start streaming: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/clients/{client_name}/streaming/stop")
+async def stop_streaming(client_name: str):
+    """Stop streaming on an OBS instance"""
+    try:
+        manager = get_obs_manager()
+        # Find the connection by name
+        state = manager.get_state()
+        connection = None
+        for conn in state['connections']:
+            if conn['name'] == client_name:
+                connection = conn
+                break
+        
+        if not connection:
+            raise HTTPException(status_code=404, detail=f"OBS client '{client_name}' not found")
+        
+        if not connection.get('connected'):
+            raise HTTPException(status_code=400, detail=f"OBS client '{client_name}' is not connected")
+        
+        # Get the actual client from manager
+        if connection['connection_id'] not in manager.clients:
+            raise HTTPException(status_code=404, detail="Client connection not found")
+        
+        client = manager.clients[connection['connection_id']]
+        
+        # Stop streaming
+        await client.stop_streaming()
+        return {"success": True, "message": f"Streaming stopped on {client_name}"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to stop streaming: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.get("/status")
 async def get_status():
     """Get overall OBS status"""

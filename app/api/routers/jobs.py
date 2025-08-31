@@ -272,6 +272,53 @@ async def get_job_summary(
         logger.error(f"Failed to get job summary: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.get("/stats")
+async def get_job_stats(
+    window: str = Query("24h", description="Time window for stats"),
+    db=Depends(get_db)
+):
+    """Get job statistics for the specified time window"""
+    try:
+        # Parse window
+        if window == "24h":
+            cutoff = datetime.utcnow() - timedelta(hours=24)
+        elif window == "7d":
+            cutoff = datetime.utcnow() - timedelta(days=7)
+        elif window == "1h":
+            cutoff = datetime.utcnow() - timedelta(hours=1)
+        else:
+            cutoff = datetime.utcnow() - timedelta(hours=24)
+        
+        cutoff_str = cutoff.isoformat()
+        
+        # Get stats
+        cursor = await db.execute("""
+            SELECT 
+                SUM(CASE WHEN state = 'completed' THEN 1 ELSE 0 END) as completed,
+                SUM(CASE WHEN state = 'failed' THEN 1 ELSE 0 END) as failed,
+                SUM(CASE WHEN state = 'running' THEN 1 ELSE 0 END) as running,
+                SUM(CASE WHEN state IN ('queued', 'pending') THEN 1 ELSE 0 END) as queued,
+                AVG(CASE WHEN state = 'completed' 
+                    THEN CAST((julianday(ended_at) - julianday(started_at)) * 86400 AS REAL)
+                    ELSE NULL END) as avg_duration
+            FROM so_jobs
+            WHERE created_at >= ?
+        """, (cutoff_str,))
+        
+        row = await cursor.fetchone()
+        
+        return {
+            "completed": row[0] or 0,
+            "failed": row[1] or 0,
+            "running": row[2] or 0,
+            "queued": row[3] or 0,
+            "avg_duration": row[4] or 0,
+            "window": window
+        }
+    except Exception as e:
+        logger.error(f"Failed to get job stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.get("/active", response_model=List[JobItem])
 async def get_active_jobs(
     limit: int = Query(default=10, le=100),

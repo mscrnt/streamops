@@ -1,0 +1,20 @@
+{
+  "name": "streamops-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP server for StreamOps API",
+  "type": "module",
+  "main": "index.js",
+  "bin": {
+    "streamops-mcp": "./index.js"
+  },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^0.6.0",
+    "axios": "^1.7.9"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

@@ -230,3 +230,5 @@ app/static/
 /thumbs/
 /logs/*.json
 config.json.local
+design-review/*
+test-results/*

@@ -53,6 +53,7 @@ async def list_assets(
     status: Optional[AssetStatus] = Query(None, description="Filter by status"),
     asset_type: Optional[AssetType] = Query(None, description="Filter by asset type"),
     types: Optional[str] = Query(None, description="Alternative parameter for asset_type"),
+    role: Optional[str] = Query(None, description="Filter by folder role (e.g., recording, editing)"),
     session_id: Optional[str] = Query(None, description="Filter by session ID"),
     tags: Optional[List[str]] = Query(None, description="Filter by tags"),
     search: Optional[str] = Query(None, description="Full-text search query"),
@@ -61,7 +62,7 @@ async def list_assets(
 ) -> AssetListResponse:
     """List assets with filtering, search, and pagination"""
     try:
-        query = "SELECT * FROM so_assets WHERE 1=1"
+        query = "SELECT * FROM so_assets a WHERE 1=1"
         params = []
         
         if status:
@@ -71,8 +72,33 @@ async def list_assets(
         # Handle both asset_type and types parameters
         type_filter = asset_type or (AssetType(types) if types else None)
         if type_filter:
-            query += " AND json_extract(streams_json, '$.type') = ?"
-            params.append(type_filter.value)
+            # Defensive fallback for assets without type field in streams_json
+            query += """
+                AND (
+                    json_extract(streams_json, '$.type') = ?
+                    OR (
+                        json_extract(streams_json, '$.type') IS NULL
+                        AND (
+                            (? = 'video' AND (lower(abs_path) LIKE '%.mp4' OR lower(abs_path) LIKE '%.mkv' OR lower(abs_path) LIKE '%.mov' OR lower(abs_path) LIKE '%.avi' OR lower(abs_path) LIKE '%.webm'))
+                            OR (? = 'audio' AND (lower(abs_path) LIKE '%.wav' OR lower(abs_path) LIKE '%.mp3' OR lower(abs_path) LIKE '%.flac' OR lower(abs_path) LIKE '%.aac' OR lower(abs_path) LIKE '%.ogg'))
+                            OR (? = 'image' AND (lower(abs_path) LIKE '%.png' OR lower(abs_path) LIKE '%.jpg' OR lower(abs_path) LIKE '%.jpeg' OR lower(abs_path) LIKE '%.webp' OR lower(abs_path) LIKE '%.gif'))
+                            OR (? = 'document' AND (lower(abs_path) LIKE '%.pdf' OR lower(abs_path) LIKE '%.doc' OR lower(abs_path) LIKE '%.docx' OR lower(abs_path) LIKE '%.txt' OR lower(abs_path) LIKE '%.md'))
+                        )
+                    )
+                )
+            """
+            params.extend([type_filter.value, type_filter.value, type_filter.value, type_filter.value, type_filter.value])
+        
+        # Role-based filtering using folder_roles table
+        if role:
+            query += """
+                AND EXISTS (
+                    SELECT 1 FROM so_folder_roles r
+                    WHERE lower(r.role) = lower(?)
+                      AND (a.abs_path LIKE r.folder_path || '%' OR a.abs_path = rtrim(r.folder_path, '/'))
+                )
+            """
+            params.append(role)
         
         if session_id:
             query += " AND json_extract(tags_json, '$.session_id') = ?"
@@ -122,7 +148,7 @@ async def list_assets(
                 id=row[0],
                 filepath=row[1],
                 filename=os.path.basename(row[1]),
-                asset_type=AssetType(streams.get('type', 'video')),
+                asset_type=AssetType(streams.get('type', 'video')) if isinstance(streams, dict) else AssetType('video'),
                 status=AssetStatus(row[17]),
                 session_id=tags.get('session_id') if isinstance(tags, dict) else None,
                 tags=tags if isinstance(tags, list) else [],

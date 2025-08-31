@@ -2,7 +2,6 @@ import { Outlet } from 'react-router-dom'
 import { useEffect } from 'react'
 import { useStore } from '@/store/useStore'
 import Sidebar from './Sidebar'
-import Header from './Header'
 import { cn } from '@/lib/utils'
 
 export default function Layout() {
@@ -24,9 +23,7 @@ export default function Layout() {
       
       {/* Main content */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        <Header />
-        
-        {/* Page content */}
+        {/* Page content - Dashboard has its own TopBar, other pages use Header */}
         <main className="flex-1 overflow-auto">
           <div className="h-full">
             <Outlet />

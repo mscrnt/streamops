@@ -2,6 +2,7 @@
 import os
 import json
 import logging
+import mimetypes
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional
@@ -64,6 +65,25 @@ class IndexJob:
         # Extract basic media info with ffprobe
         media_info = await self._get_media_info(file_path)
         
+        # Classify asset type based on extension and MIME type
+        ext = (Path(file_path).suffix or "").lower()
+        mime, _ = mimetypes.guess_type(file_path)
+        
+        def classify(ext: str, mime: str | None) -> str:
+            if mime:
+                if mime.startswith("video/"): return "video"
+                if mime.startswith("audio/"): return "audio"
+                if mime.startswith("image/"): return "image"
+                if mime in ("application/pdf",): return "document"
+            # fallback by extension
+            if ext in [".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v", ".mpg", ".mpeg", ".wmv", ".flv"]: return "video"
+            if ext in [".wav", ".mp3", ".flac", ".aac", ".ogg", ".m4a", ".wma"]: return "audio"
+            if ext in [".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tiff"]: return "image"
+            if ext in [".pdf", ".doc", ".docx", ".txt", ".md", ".rtf"]: return "document"
+            return "unknown"
+        
+        asset_type = classify(ext, mime)
+        
         # Calculate quick hash if enabled (for deduplication)
         file_hash = None
         if data.get("calculate_hash", False):
@@ -95,7 +115,7 @@ class IndexJob:
                 media_info.get("height"),
                 media_info.get("fps"),
                 media_info.get("container"),
-                json.dumps(media_info.get("streams", [])),
+                json.dumps({**media_info.get("streams_data", {}), "type": asset_type, "streams": media_info.get("streams", [])}),
                 "completed",
                 now,
                 asset_id
@@ -122,7 +142,7 @@ class IndexJob:
                 media_info.get("height"),
                 media_info.get("fps"),
                 media_info.get("container"),
-                json.dumps(media_info.get("streams", [])),
+                json.dumps({**media_info.get("streams_data", {}), "type": asset_type, "streams": media_info.get("streams", [])}),
                 json.dumps([]),  # Empty tags for now
                 "completed",
                 now, now
@@ -178,6 +198,7 @@ class IndexJob:
             
             # Get stream info
             info["streams"] = []
+            info["streams_data"] = {}  # Additional data to merge into streams_json
             for stream in data.get("streams", []):
                 stream_info = {
                     "index": stream.get("index"),
