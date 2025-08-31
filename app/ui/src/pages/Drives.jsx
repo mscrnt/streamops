@@ -20,7 +20,7 @@ import Button from '@/components/ui/Button'
 import Input, { FormField, Label } from '@/components/ui/Input'
 import { SimpleSelect } from '@/components/ui/Select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow, TableSkeleton, TableEmpty } from '@/components/ui/Table'
-import { useDrives, useAddDrive, useUpdateDrive, useRemoveDrive } from '@/hooks/useApi'
+import { useDrives, useDiscoveredDrives, useAssignRole, useRoleAssignments, useRemoveRole } from '@/hooks/useDrives'
 import { formatBytes, formatRelativeTime } from '@/lib/utils'
 import {
   DropdownMenu,
@@ -53,62 +53,25 @@ export default function Drives() {
 
   // API hooks
   const { data: drives, isLoading: drivesLoading } = useDrives()
-  const addDrive = useAddDrive()
-  const updateDrive = useUpdateDrive()
-  const removeDrive = useRemoveDrive()
+  const { data: roles } = useRoleAssignments()
+  const assignRole = useAssignRole()
+  const removeRole = useRemoveRole()
 
   const handleAddDrive = async () => {
-    try {
-      await addDrive.mutateAsync({
-        ...newDrive,
-        file_patterns: newDrive.file_patterns.filter(p => p.trim()),
-        ignore_patterns: newDrive.ignore_patterns.filter(p => p.trim())
-      })
-      setShowAddDialog(false)
-      setNewDrive({
-        name: '',
-        path: '',
-        watch_enabled: true,
-        recursive: true,
-        file_patterns: ['*.mp4', '*.mov', '*.avi', '*.mkv'],
-        ignore_patterns: ['*.tmp', '.*'],
-        auto_index: true,
-        auto_proxy: false,
-        auto_thumbnail: true,
-        webhook_url: '',
-        notes: ''
-      })
-    } catch (error) {
-      toast.error('Failed to add drive')
-    }
+    // This functionality would be handled through role assignment now
+    toast.info('Use Settings > Wizard to configure drives')
+    setShowAddDialog(false)
   }
 
   const handleEditDrive = async () => {
-    try {
-      await updateDrive.mutateAsync({
-        driveId: editingDrive.id,
-        updates: {
-          ...editingDrive,
-          file_patterns: editingDrive.file_patterns.filter(p => p.trim()),
-          ignore_patterns: editingDrive.ignore_patterns.filter(p => p.trim())
-        }
-      })
-      setShowEditDialog(false)
-      setEditingDrive(null)
-    } catch (error) {
-      toast.error('Failed to update drive')
-    }
+    // This functionality would be handled through role assignment now
+    toast.info('Use Settings > Wizard to configure drives')
+    setShowEditDialog(false)
   }
 
   const handleToggleWatching = async (driveId, enabled) => {
-    try {
-      await updateDrive.mutateAsync({
-        driveId,
-        updates: { watch_enabled: enabled }
-      })
-    } catch (error) {
-      toast.error('Failed to toggle drive watching')
-    }
+    // This functionality would be handled through role assignment now
+    toast.info('Watching is configured through role assignments')
   }
 
   const getStatusColor = (status) => {
@@ -173,7 +136,7 @@ export default function Drives() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
-              {drives?.filter(drive => drive.watch_enabled && drive.status === 'online')?.length || 0}
+              {drives?.filter(drive => drive.watching)?.length || 0}
             </div>
             <p className="text-xs text-muted-foreground">
               Active monitoring
@@ -188,7 +151,7 @@ export default function Drives() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
-              {drives?.reduce((sum, drive) => sum + (drive.file_count || 0), 0) || 0}
+              {drives?.reduce((sum, drive) => sum + (drive.total_assets || 0), 0) || 0}
             </div>
             <p className="text-xs text-muted-foreground">
               Indexed files
@@ -203,7 +166,7 @@ export default function Drives() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
-              {formatBytes(drives?.reduce((sum, drive) => sum + (drive.total_size || 0), 0) || 0)}
+              {formatBytes(drives?.reduce((sum, drive) => sum + ((drive.total || 0) - (drive.free || 0)), 0) || 0)}
             </div>
             <p className="text-xs text-muted-foreground">
               Total storage
@@ -240,11 +203,11 @@ export default function Drives() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Drive</TableHead>
+                  <TableHead>Roles</TableHead>
+                  <TableHead>Assets</TableHead>
+                  <TableHead>Storage</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead>Files</TableHead>
-                  <TableHead>Size</TableHead>
-                  <TableHead>Auto Actions</TableHead>
-                  <TableHead>Last Scan</TableHead>
+                  <TableHead>Health</TableHead>
                   <TableHead className="w-12"></TableHead>
                 </TableRow>
               </TableHeader>
@@ -255,8 +218,8 @@ export default function Drives() {
                       <div className="space-y-1">
                         <div className="flex items-center space-x-2">
                           <Folder className="h-4 w-4 text-muted-foreground" />
-                          <p className="font-medium">{drive.name}</p>
-                          {drive.watch_enabled ? (
+                          <p className="font-medium">{drive.label}</p>
+                          {drive.watching ? (
                             <Eye className="h-4 w-4 text-green-500" title="Watching" />
                           ) : (
                             <EyeOff className="h-4 w-4 text-gray-500" title="Not watching" />
@@ -265,47 +228,74 @@ export default function Drives() {
                         <p className="text-xs text-muted-foreground font-mono">
                           {drive.path}
                         </p>
-                        {drive.notes && (
-                          <p className="text-xs text-muted-foreground">
-                            {drive.notes}
-                          </p>
+                      </div>
+                    </TableCell>
+                    
+                    <TableCell>
+                      <div className="flex flex-wrap gap-1">
+                        {drive.roles && drive.roles.length > 0 ? (
+                          drive.roles.map((role) => (
+                            <Badge key={role} variant="secondary" className="text-xs">
+                              {role}
+                            </Badge>
+                          ))
+                        ) : (
+                          <span className="text-xs text-muted-foreground">No roles</span>
                         )}
+                      </div>
+                    </TableCell>
+                    
+                    <TableCell className="text-sm">
+                      {drive.total_assets?.toLocaleString() || 0}
+                    </TableCell>
+                    
+                    <TableCell className="text-sm">
+                      <div className="space-y-1">
+                        <div>{formatBytes((drive.total || 0) - (drive.free || 0))} used</div>
+                        <div className="text-xs text-muted-foreground">
+                          {formatBytes(drive.free || 0)} free
+                        </div>
                       </div>
                     </TableCell>
                     
                     <TableCell>
                       <div className="flex items-center space-x-2">
                         <div className={`h-2 w-2 rounded-full ${
-                          drive.status === 'online' ? 'bg-green-500' :
-                          drive.status === 'scanning' ? 'bg-blue-500' :
-                          drive.status === 'error' ? 'bg-red-500' :
+                          drive.watcher === 'listening' ? 'bg-green-500' :
+                          drive.watcher === 'scanning' ? 'bg-blue-500' :
+                          drive.watcher === 'error' ? 'bg-red-500' :
                           'bg-gray-500'
                         }`} />
-                        <StatusBadge status={drive.status} />
-                        {drive.last_error && (
-                          <AlertTriangle className="h-4 w-4 text-red-500" title={drive.last_error} />
-                        )}
+                        <span className="text-xs">
+                          {drive.watcher || 'stopped'}
+                        </span>
                       </div>
-                    </TableCell>
-                    
-                    <TableCell className="text-sm">
-                      {drive.file_count?.toLocaleString() || 0}
-                    </TableCell>
-                    
-                    <TableCell className="text-sm">
-                      {formatBytes(drive.total_size || 0)}
                     </TableCell>
                     
                     <TableCell>
-                      <div className="flex space-x-1">
-                        {drive.auto_index && <Badge variant="secondary" className="text-xs">Index</Badge>}
-                        {drive.auto_proxy && <Badge variant="secondary" className="text-xs">Proxy</Badge>}
-                        {drive.auto_thumbnail && <Badge variant="secondary" className="text-xs">Thumbs</Badge>}
+                      <div className="flex items-center space-x-2">
+                        {drive.health === 'ok' && (
+                          <CheckCircle className="h-4 w-4 text-green-500" />
+                        )}
+                        {drive.health === 'warning' && (
+                          <AlertTriangle className="h-4 w-4 text-yellow-500" />
+                        )}
+                        {drive.health === 'critical' && (
+                          <AlertTriangle className="h-4 w-4 text-red-500" />
+                        )}
+                        {drive.health === 'error' && (
+                          <AlertTriangle className="h-4 w-4 text-red-500" />
+                        )}
+                        {drive.health === 'missing' && (
+                          <AlertTriangle className="h-4 w-4 text-gray-500" />
+                        )}
+                        {drive.health === 'read_only' && (
+                          <EyeOff className="h-4 w-4 text-orange-500" />
+                        )}
+                        <span className="text-xs">
+                          {drive.health || 'unknown'}
+                        </span>
                       </div>
-                    </TableCell>
-                    
-                    <TableCell className="text-sm text-muted-foreground">
-                      {drive.last_scan_at ? formatRelativeTime(drive.last_scan_at) : 'Never'}
                     </TableCell>
                     
                     <TableCell>
@@ -322,55 +312,23 @@ export default function Drives() {
                           <DropdownMenuItem 
                             className="px-2 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground rounded cursor-pointer flex items-center"
                             onClick={() => {
-                              setEditingDrive({...drive})
-                              setShowEditDialog(true)
+                              // View drive details
+                              toast.info('Drive details coming soon')
                             }}
                           >
-                            <Edit className="h-4 w-4 mr-2" />
-                            Edit
-                          </DropdownMenuItem>
-                          
-                          <DropdownMenuItem 
-                            className="px-2 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground rounded cursor-pointer flex items-center"
-                            onClick={() => handleToggleWatching(drive.id, !drive.watch_enabled)}
-                          >
-                            {drive.watch_enabled ? (
-                              <>
-                                <EyeOff className="h-4 w-4 mr-2" />
-                                Stop Watching
-                              </>
-                            ) : (
-                              <>
-                                <Eye className="h-4 w-4 mr-2" />
-                                Start Watching
-                              </>
-                            )}
+                            <FolderOpen className="h-4 w-4 mr-2" />
+                            View Details
                           </DropdownMenuItem>
                           
                           <DropdownMenuItem 
                             className="px-2 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground rounded cursor-pointer flex items-center"
                             onClick={() => {
-                              // Implement force scan
-                              handleScanDrive(drive.id, true);
+                              // Force rescan
                               toast.info('Force scan coming soon')
                             }}
                           >
                             <Activity className="h-4 w-4 mr-2" />
                             Force Scan
-                          </DropdownMenuItem>
-                          
-                          <DropdownMenuSeparator className="h-px bg-border my-1" />
-                          
-                          <DropdownMenuItem 
-                            className="px-2 py-1.5 text-sm hover:bg-destructive hover:text-destructive-foreground rounded cursor-pointer flex items-center"
-                            onClick={() => {
-                              if (confirm(`Remove drive "${drive.name}"? This will not delete files.`)) {
-                                removeDrive.mutate(drive.id)
-                              }
-                            }}
-                          >
-                            <Trash2 className="h-4 w-4 mr-2" />
-                            Remove
                           </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
@@ -512,7 +470,6 @@ export default function Drives() {
               </Button>
               <Button 
                 onClick={handleAddDrive}
-                loading={addDrive.isLoading}
                 disabled={!newDrive.name.trim() || !newDrive.path.trim()}
               >
                 Add Drive
@@ -647,7 +604,6 @@ export default function Drives() {
               </Button>
               <Button 
                 onClick={handleEditDrive}
-                loading={updateDrive.isLoading}
                 disabled={!editingDrive?.name?.trim() || !editingDrive?.path?.trim()}
               >
                 Save Changes
