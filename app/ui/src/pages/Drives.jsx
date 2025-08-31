@@ -2,31 +2,27 @@ import { useState } from 'react'
 import { 
   HardDrive, 
   Plus, 
-  Edit, 
-  Trash2, 
   FolderOpen, 
   Eye, 
   EyeOff, 
   AlertTriangle,
   CheckCircle,
-  Clock,
   MoreHorizontal,
   Folder,
-  Activity
+  Activity,
+  Info
 } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/Card'
-import { Badge, StatusBadge } from '@/components/ui/Badge'
+import { Badge } from '@/components/ui/Badge'
 import Button from '@/components/ui/Button'
-import Input, { FormField, Label } from '@/components/ui/Input'
-import { SimpleSelect } from '@/components/ui/Select'
+import Input, { FormField } from '@/components/ui/Input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow, TableSkeleton, TableEmpty } from '@/components/ui/Table'
-import { useDrives, useDiscoveredDrives, useAssignRole, useRoleAssignments, useRemoveRole } from '@/hooks/useDrives'
-import { formatBytes, formatRelativeTime } from '@/lib/utils'
+import { useDrives, useRoleAssignments } from '@/hooks/useDrives'
+import { formatBytes } from '@/lib/utils'
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@radix-ui/react-dropdown-menu'
 import * as Dialog from '@radix-ui/react-dialog'
@@ -53,9 +49,7 @@ export default function Drives() {
 
   // API hooks
   const { data: drives, isLoading: drivesLoading } = useDrives()
-  const { data: roles } = useRoleAssignments()
-  const assignRole = useAssignRole()
-  const removeRole = useRemoveRole()
+  const { data: roleAssignments } = useRoleAssignments()
 
   const handleAddDrive = async () => {
     // This functionality would be handled through role assignment now
@@ -69,34 +63,7 @@ export default function Drives() {
     setShowEditDialog(false)
   }
 
-  const handleToggleWatching = async (driveId, enabled) => {
-    // This functionality would be handled through role assignment now
-    toast.info('Watching is configured through role assignments')
-  }
 
-  const getStatusColor = (status) => {
-    switch (status) {
-      case 'online':
-        return 'text-green-500'
-      case 'offline':
-        return 'text-red-500'
-      case 'scanning':
-        return 'text-blue-500'
-      case 'error':
-        return 'text-red-500'
-      default:
-        return 'text-gray-500'
-    }
-  }
-
-  const commonFilePatterns = [
-    '*.mp4', '*.mov', '*.avi', '*.mkv', '*.wmv', '*.flv', '*.webm',
-    '*.mp3', '*.wav', '*.aac', '*.flac', '*.ogg', '*.m4a'
-  ]
-
-  const commonIgnorePatterns = [
-    '*.tmp', '*.part', '.*', 'Thumbs.db', '.DS_Store', '*.log'
-  ]
 
   return (
     <div className="space-y-6 p-6">
@@ -203,8 +170,8 @@ export default function Drives() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Drive</TableHead>
-                  <TableHead>Roles</TableHead>
-                  <TableHead>Assets</TableHead>
+                  <TableHead>Role Assignments</TableHead>
+                  <TableHead>Total Assets</TableHead>
                   <TableHead>Storage</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Health</TableHead>
@@ -232,17 +199,40 @@ export default function Drives() {
                     </TableCell>
                     
                     <TableCell>
-                      <div className="flex flex-wrap gap-1">
-                        {drive.roles && drive.roles.length > 0 ? (
-                          drive.roles.map((role) => (
-                            <Badge key={role} variant="secondary" className="text-xs">
-                              {role}
-                            </Badge>
-                          ))
-                        ) : (
-                          <span className="text-xs text-muted-foreground">No roles</span>
-                        )}
-                      </div>
+                      {drive.role_details && drive.role_details.length > 0 ? (
+                        <div className="rounded-md border border-border/50 overflow-hidden">
+                          <table className="w-full text-xs">
+                            <tbody className="divide-y divide-border/50">
+                              {drive.role_details.map((roleDetail) => (
+                                <tr key={roleDetail.role} className="hover:bg-muted/30">
+                                  <td className="px-2 py-1.5 w-24">
+                                    <Badge variant="outline" className="text-xs font-medium">
+                                      {roleDetail.role}
+                                    </Badge>
+                                  </td>
+                                  <td className="px-2 py-1.5">
+                                    <code className="text-xs text-muted-foreground">
+                                      {roleDetail.path.replace(drive.path + '/', './')}
+                                    </code>
+                                  </td>
+                                  <td className="px-2 py-1.5 text-right text-muted-foreground">
+                                    {roleDetail.asset_count}
+                                  </td>
+                                  <td className="px-2 py-1.5 w-16 text-center">
+                                    {roleDetail.watching ? (
+                                      <Eye className="h-3 w-3 text-green-500 mx-auto" />
+                                    ) : (
+                                      <EyeOff className="h-3 w-3 text-gray-400 mx-auto" />
+                                    )}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">No roles assigned</span>
+                      )}
                     </TableCell>
                     
                     <TableCell className="text-sm">
