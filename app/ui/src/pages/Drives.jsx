@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { 
   HardDrive, 
-  Plus, 
   FolderOpen, 
   Eye, 
   EyeOff, 
@@ -10,60 +9,60 @@ import {
   MoreHorizontal,
   Folder,
   Activity,
-  Info
+  Plus,
+  Video,
+  Edit,
+  Archive,
+  Clock
 } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
 import Button from '@/components/ui/Button'
-import Input, { FormField } from '@/components/ui/Input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow, TableSkeleton, TableEmpty } from '@/components/ui/Table'
-import { useDrives, useRoleAssignments } from '@/hooks/useDrives'
+import { useDrives, useAssignRole } from '@/hooks/useDrives'
 import { formatBytes } from '@/lib/utils'
+import FolderPicker from '@/components/FolderPicker'
+import * as Dialog from '@radix-ui/react-dialog'
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@radix-ui/react-dropdown-menu'
-import * as Dialog from '@radix-ui/react-dialog'
 import toast from 'react-hot-toast'
 
 export default function Drives() {
-  // Local state
-  const [showAddDialog, setShowAddDialog] = useState(false)
-  const [showEditDialog, setShowEditDialog] = useState(false)
-  const [editingDrive, setEditingDrive] = useState(null)
-  const [newDrive, setNewDrive] = useState({
-    name: '',
-    path: '',
-    watch_enabled: true,
-    recursive: true,
-    file_patterns: ['*.mp4', '*.mov', '*.avi', '*.mkv'],
-    ignore_patterns: ['*.tmp', '.*'],
-    auto_index: true,
-    auto_proxy: false,
-    auto_thumbnail: true,
-    webhook_url: '',
-    notes: ''
-  })
-
+  const [showPicker, setShowPicker] = useState(false)
+  const [selectedRole, setSelectedRole] = useState(null)
+  
   // API hooks
-  const { data: drives, isLoading: drivesLoading } = useDrives()
-  const { data: roleAssignments } = useRoleAssignments()
-
-  const handleAddDrive = async () => {
-    // This functionality would be handled through role assignment now
-    toast.info('Use Settings > Wizard to configure drives')
-    setShowAddDialog(false)
+  const { data: drives, isLoading: drivesLoading, refetch } = useDrives()
+  const assignRole = useAssignRole()
+  
+  const handleFolderSelect = async (selection) => {
+    if (!selectedRole) return
+    
+    try {
+      await assignRole.mutateAsync({
+        role: selectedRole,
+        root_id: selection.root_id,
+        subpath: selection.subpath,
+        watch: selectedRole === 'recording' // Watch recording folder by default
+      })
+      
+      setShowPicker(false)
+      setSelectedRole(null)
+      refetch()
+      toast.success(`${selectedRole} folder assigned successfully`)
+    } catch (error) {
+      console.error('Failed to assign role:', error)
+    }
   }
-
-  const handleEditDrive = async () => {
-    // This functionality would be handled through role assignment now
-    toast.info('Use Settings > Wizard to configure drives')
-    setShowEditDialog(false)
+  
+  const openRolePicker = (role) => {
+    setSelectedRole(role)
+    setShowPicker(true)
   }
-
-
 
   return (
     <div className="space-y-6 p-6">
@@ -75,9 +74,9 @@ export default function Drives() {
             Configure watched folders and storage locations
           </p>
         </div>
-        <Button onClick={() => setShowAddDialog(true)}>
+        <Button onClick={() => setShowPicker(true)}>
           <Plus className="h-4 w-4 mr-2" />
-          Add Drive
+          Add Role
         </Button>
       </div>
 
@@ -159,9 +158,9 @@ export default function Drives() {
               title="No drives configured"
               description="Add your first drive to start monitoring media files"
               action={
-                <Button onClick={() => setShowAddDialog(true)}>
+                <Button onClick={() => setShowPicker(true)}>
                   <Plus className="h-4 w-4 mr-2" />
-                  Add Drive
+                  Add Role
                 </Button>
               }
             />
@@ -331,277 +330,98 @@ export default function Drives() {
         </CardContent>
       </Card>
 
-      {/* Add Drive Dialog */}
-      <Dialog.Root open={showAddDialog} onOpenChange={setShowAddDialog}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 bg-black/50 z-50" />
-          <Dialog.Content className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-background border border-border rounded-lg shadow-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto z-50">
-            <Dialog.Title className="text-lg font-semibold mb-4">Add New Drive</Dialog.Title>
-            
-            <div className="space-y-4">
-              <FormField label="Drive Name" required>
-                <Input
-                  placeholder="e.g., Recording Drive"
-                  value={newDrive.name}
-                  onChange={(e) => setNewDrive({...newDrive, name: e.target.value})}
-                />
-              </FormField>
+      {/* Role Assignment Modal */}
+      {!selectedRole && showPicker && (
+        <Dialog.Root open={showPicker} onOpenChange={setShowPicker}>
+          <Dialog.Portal>
+            <Dialog.Overlay className="fixed inset-0 bg-black/50 z-50" />
+            <Dialog.Content className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-background border border-border rounded-lg shadow-lg p-6 w-full max-w-md z-50">
+              <Dialog.Title className="text-lg font-semibold mb-4">Select Folder Role</Dialog.Title>
+              <Dialog.Description className="text-sm text-muted-foreground mb-6">
+                Choose what type of folder you want to add
+              </Dialog.Description>
               
-              <FormField label="Path" required>
-                <Input
-                  placeholder="e.g., /mnt/recordings or D:\Recordings"
-                  value={newDrive.path}
-                  onChange={(e) => setNewDrive({...newDrive, path: e.target.value})}
-                />
-              </FormField>
-              
-              <FormField label="Notes">
-                <Input
-                  placeholder="Optional description"
-                  value={newDrive.notes}
-                  onChange={(e) => setNewDrive({...newDrive, notes: e.target.value})}
-                />
-              </FormField>
-              
-              <div className="grid gap-4 md:grid-cols-2">
-                <FormField label="File Patterns (one per line)">
-                  <textarea
-                    rows={4}
-                    className="w-full p-2 text-sm border border-input rounded-md"
-                    placeholder="*.mp4&#10;*.mov&#10;*.avi"
-                    value={newDrive.file_patterns.join('\n')}
-                    onChange={(e) => setNewDrive({...newDrive, file_patterns: e.target.value.split('\n').filter(p => p.trim())})}
-                  />
-                </FormField>
+              <div className="grid gap-3">
+                <button
+                  onClick={() => openRolePicker('recording')}
+                  className="flex items-start gap-3 p-4 rounded-lg border border-border hover:bg-accent/50 transition-colors text-left"
+                >
+                  <Video className="h-5 w-5 text-blue-500 mt-0.5" />
+                  <div>
+                    <div className="font-medium">Recording Source</div>
+                    <div className="text-sm text-muted-foreground">Where OBS saves your recordings</div>
+                  </div>
+                </button>
                 
-                <FormField label="Ignore Patterns (one per line)">
-                  <textarea
-                    rows={4}
-                    className="w-full p-2 text-sm border border-input rounded-md"
-                    placeholder="*.tmp&#10;.*&#10;*.part"
-                    value={newDrive.ignore_patterns.join('\n')}
-                    onChange={(e) => setNewDrive({...newDrive, ignore_patterns: e.target.value.split('\n').filter(p => p.trim())})}
-                  />
-                </FormField>
+                <button
+                  onClick={() => openRolePicker('editing')}
+                  className="flex items-start gap-3 p-4 rounded-lg border border-border hover:bg-accent/50 transition-colors text-left"
+                >
+                  <Edit className="h-5 w-5 text-green-500 mt-0.5" />
+                  <div>
+                    <div className="font-medium">Editing Target</div>
+                    <div className="text-sm text-muted-foreground">Where processed files will be moved</div>
+                  </div>
+                </button>
+                
+                <button
+                  onClick={() => openRolePicker('archive')}
+                  className="flex items-start gap-3 p-4 rounded-lg border border-border hover:bg-accent/50 transition-colors text-left"
+                >
+                  <Archive className="h-5 w-5 text-purple-500 mt-0.5" />
+                  <div>
+                    <div className="font-medium">Archive</div>
+                    <div className="text-sm text-muted-foreground">Long-term storage location</div>
+                  </div>
+                </button>
+                
+                <button
+                  onClick={() => openRolePicker('backlog')}
+                  className="flex items-start gap-3 p-4 rounded-lg border border-border hover:bg-accent/50 transition-colors text-left"
+                >
+                  <Clock className="h-5 w-5 text-orange-500 mt-0.5" />
+                  <div>
+                    <div className="font-medium">Backlog</div>
+                    <div className="text-sm text-muted-foreground">Files awaiting processing</div>
+                  </div>
+                </button>
+                
+                <button
+                  onClick={() => openRolePicker('assets')}
+                  className="flex items-start gap-3 p-4 rounded-lg border border-border hover:bg-accent/50 transition-colors text-left"
+                >
+                  <Folder className="h-5 w-5 text-indigo-500 mt-0.5" />
+                  <div>
+                    <div className="font-medium">Assets</div>
+                    <div className="text-sm text-muted-foreground">Reusable media files (logos, overlays, etc.)</div>
+                  </div>
+                </button>
               </div>
               
-              <div className="space-y-3">
-                <h4 className="font-medium">Watching Options</h4>
-                <div className="grid gap-3 md:grid-cols-2">
-                  <label className="flex items-center space-x-2">
-                    <input
-                      type="checkbox"
-                      checked={newDrive.watch_enabled}
-                      onChange={(e) => setNewDrive({...newDrive, watch_enabled: e.target.checked})}
-                      className="rounded border-border"
-                    />
-                    <span className="text-sm">Enable watching</span>
-                  </label>
-                  
-                  <label className="flex items-center space-x-2">
-                    <input
-                      type="checkbox"
-                      checked={newDrive.recursive}
-                      onChange={(e) => setNewDrive({...newDrive, recursive: e.target.checked})}
-                      className="rounded border-border"
-                    />
-                    <span className="text-sm">Watch subdirectories</span>
-                  </label>
-                </div>
+              <div className="flex justify-end mt-6">
+                <Button variant="outline" onClick={() => setShowPicker(false)}>
+                  Cancel
+                </Button>
               </div>
-              
-              <div className="space-y-3">
-                <h4 className="font-medium">Automatic Actions</h4>
-                <div className="grid gap-3 md:grid-cols-3">
-                  <label className="flex items-center space-x-2">
-                    <input
-                      type="checkbox"
-                      checked={newDrive.auto_index}
-                      onChange={(e) => setNewDrive({...newDrive, auto_index: e.target.checked})}
-                      className="rounded border-border"
-                    />
-                    <span className="text-sm">Auto-index files</span>
-                  </label>
-                  
-                  <label className="flex items-center space-x-2">
-                    <input
-                      type="checkbox"
-                      checked={newDrive.auto_proxy}
-                      onChange={(e) => setNewDrive({...newDrive, auto_proxy: e.target.checked})}
-                      className="rounded border-border"
-                    />
-                    <span className="text-sm">Auto-create proxies</span>
-                  </label>
-                  
-                  <label className="flex items-center space-x-2">
-                    <input
-                      type="checkbox"
-                      checked={newDrive.auto_thumbnail}
-                      onChange={(e) => setNewDrive({...newDrive, auto_thumbnail: e.target.checked})}
-                      className="rounded border-border"
-                    />
-                    <span className="text-sm">Auto-generate thumbnails</span>
-                  </label>
-                </div>
-              </div>
-              
-              <FormField label="Webhook URL (optional)">
-                <Input
-                  placeholder="https://example.com/webhook"
-                  value={newDrive.webhook_url}
-                  onChange={(e) => setNewDrive({...newDrive, webhook_url: e.target.value})}
-                />
-              </FormField>
-            </div>
-            
-            <div className="flex justify-end space-x-2 mt-6">
-              <Button variant="outline" onClick={() => setShowAddDialog(false)}>
-                Cancel
-              </Button>
-              <Button 
-                onClick={handleAddDrive}
-                disabled={!newDrive.name.trim() || !newDrive.path.trim()}
-              >
-                Add Drive
-              </Button>
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+            </Dialog.Content>
+          </Dialog.Portal>
+        </Dialog.Root>
+      )}
 
-      {/* Edit Drive Dialog */}
-      <Dialog.Root open={showEditDialog} onOpenChange={setShowEditDialog}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 bg-black/50 z-50" />
-          <Dialog.Content className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-background border border-border rounded-lg shadow-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto z-50">
-            <Dialog.Title className="text-lg font-semibold mb-4">Edit Drive</Dialog.Title>
-            
-            {editingDrive && (
-              <div className="space-y-4">
-                <FormField label="Drive Name" required>
-                  <Input
-                    value={editingDrive.name}
-                    onChange={(e) => setEditingDrive({...editingDrive, name: e.target.value})}
-                  />
-                </FormField>
-                
-                <FormField label="Path" required>
-                  <Input
-                    value={editingDrive.path}
-                    onChange={(e) => setEditingDrive({...editingDrive, path: e.target.value})}
-                  />
-                </FormField>
-                
-                <FormField label="Notes">
-                  <Input
-                    value={editingDrive.notes || ''}
-                    onChange={(e) => setEditingDrive({...editingDrive, notes: e.target.value})}
-                  />
-                </FormField>
-                
-                <div className="grid gap-4 md:grid-cols-2">
-                  <FormField label="File Patterns (one per line)">
-                    <textarea
-                      rows={4}
-                      className="w-full p-2 text-sm border border-input rounded-md"
-                      value={editingDrive.file_patterns?.join('\n') || ''}
-                      onChange={(e) => setEditingDrive({...editingDrive, file_patterns: e.target.value.split('\n').filter(p => p.trim())})}
-                    />
-                  </FormField>
-                  
-                  <FormField label="Ignore Patterns (one per line)">
-                    <textarea
-                      rows={4}
-                      className="w-full p-2 text-sm border border-input rounded-md"
-                      value={editingDrive.ignore_patterns?.join('\n') || ''}
-                      onChange={(e) => setEditingDrive({...editingDrive, ignore_patterns: e.target.value.split('\n').filter(p => p.trim())})}
-                    />
-                  </FormField>
-                </div>
-                
-                <div className="space-y-3">
-                  <h4 className="font-medium">Watching Options</h4>
-                  <div className="grid gap-3 md:grid-cols-2">
-                    <label className="flex items-center space-x-2">
-                      <input
-                        type="checkbox"
-                        checked={editingDrive.watch_enabled}
-                        onChange={(e) => setEditingDrive({...editingDrive, watch_enabled: e.target.checked})}
-                        className="rounded border-border"
-                      />
-                      <span className="text-sm">Enable watching</span>
-                    </label>
-                    
-                    <label className="flex items-center space-x-2">
-                      <input
-                        type="checkbox"
-                        checked={editingDrive.recursive}
-                        onChange={(e) => setEditingDrive({...editingDrive, recursive: e.target.checked})}
-                        className="rounded border-border"
-                      />
-                      <span className="text-sm">Watch subdirectories</span>
-                    </label>
-                  </div>
-                </div>
-                
-                <div className="space-y-3">
-                  <h4 className="font-medium">Automatic Actions</h4>
-                  <div className="grid gap-3 md:grid-cols-3">
-                    <label className="flex items-center space-x-2">
-                      <input
-                        type="checkbox"
-                        checked={editingDrive.auto_index}
-                        onChange={(e) => setEditingDrive({...editingDrive, auto_index: e.target.checked})}
-                        className="rounded border-border"
-                      />
-                      <span className="text-sm">Auto-index files</span>
-                    </label>
-                    
-                    <label className="flex items-center space-x-2">
-                      <input
-                        type="checkbox"
-                        checked={editingDrive.auto_proxy}
-                        onChange={(e) => setEditingDrive({...editingDrive, auto_proxy: e.target.checked})}
-                        className="rounded border-border"
-                      />
-                      <span className="text-sm">Auto-create proxies</span>
-                    </label>
-                    
-                    <label className="flex items-center space-x-2">
-                      <input
-                        type="checkbox"
-                        checked={editingDrive.auto_thumbnail}
-                        onChange={(e) => setEditingDrive({...editingDrive, auto_thumbnail: e.target.checked})}
-                        className="rounded border-border"
-                      />
-                      <span className="text-sm">Auto-generate thumbnails</span>
-                    </label>
-                  </div>
-                </div>
-                
-                <FormField label="Webhook URL (optional)">
-                  <Input
-                    value={editingDrive.webhook_url || ''}
-                    onChange={(e) => setEditingDrive({...editingDrive, webhook_url: e.target.value})}
-                  />
-                </FormField>
-              </div>
-            )}
-            
-            <div className="flex justify-end space-x-2 mt-6">
-              <Button variant="outline" onClick={() => setShowEditDialog(false)}>
-                Cancel
-              </Button>
-              <Button 
-                onClick={handleEditDrive}
-                disabled={!editingDrive?.name?.trim() || !editingDrive?.path?.trim()}
-              >
-                Save Changes
-              </Button>
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+      {/* Folder Picker Modal */}
+      {selectedRole && showPicker && (
+        <FolderPicker
+          open={showPicker}
+          onClose={() => {
+            setShowPicker(false)
+            setSelectedRole(null)
+          }}
+          onSelect={handleFolderSelect}
+          requireWrite={['recording', 'editing', 'archive', 'assets'].includes(selectedRole)}
+          role={selectedRole}
+          title={`Select ${selectedRole.charAt(0).toUpperCase() + selectedRole.slice(1)} Folder`}
+        />
+      )}
     </div>
   )
 }
