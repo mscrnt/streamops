@@ -18,7 +18,7 @@ export function useEventStream() {
         
       case 'recording.state':
         // Recording state changed - update guardrails immediately
-        console.log('Recording state changed:', data.is_recording);
+        // console.log('Recording state changed:', data.is_recording);
         
         // Immediately update system summary for guardrails status
         queryClient.invalidateQueries(['system', 'summary']);
@@ -53,7 +53,7 @@ export function useEventStream() {
     const maxReconnectAttempts = 10;
 
     const connect = () => {
-      console.log(`Connecting to event stream... (attempt ${reconnectAttempts + 1})`);
+      // console.log(`Connecting to event stream... (attempt ${reconnectAttempts + 1})`);
       
       // Clear any existing connection
       if (eventSource) {
@@ -63,7 +63,7 @@ export function useEventStream() {
       eventSource = new EventSource('/api/events/stream');
 
       eventSource.onopen = () => {
-        console.log('Connected to event stream');
+        // console.log('Connected to event stream');
         reconnectAttempts = 0; // Reset attempts on successful connection
       };
 
@@ -95,7 +95,7 @@ export function useEventStream() {
       eventSource.addEventListener('recording.state', handleEvent);
       eventSource.addEventListener('heartbeat', handleEvent);
       eventSource.addEventListener('connected', (event) => {
-        console.log('Event stream connected:', event.data);
+        // console.log('Event stream connected:', event.data);
       });
     };
 

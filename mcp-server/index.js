@@ -150,6 +150,100 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         },
       },
     },
+    {
+      name: 'streamops_create_job',
+      description: 'Create a new processing job for an asset',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          asset_id: { type: 'string', description: 'Asset ID to process' },
+          job_type: { 
+            type: 'string',
+            enum: ['remux', 'proxy', 'thumbnail', 'transcode', 'index'],
+            description: 'Type of job to create'
+          },
+          params: { 
+            type: 'object', 
+            description: 'Job-specific parameters (e.g., container for remux, codec for proxy)',
+            properties: {
+              container: { type: 'string', description: 'For remux: output container (mov, mp4, mkv)' },
+              codec: { type: 'string', description: 'For proxy: codec (dnxhr_lb, prores, h264)' },
+              preset: { type: 'string', description: 'For transcode: preset name' },
+            }
+          }
+        },
+        required: ['asset_id', 'job_type']
+      }
+    },
+    {
+      name: 'streamops_cancel_job',
+      description: 'Cancel a running or queued job',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          job_id: { type: 'string', description: 'Job ID to cancel' },
+        },
+        required: ['job_id']
+      }
+    },
+    {
+      name: 'streamops_list_rules',
+      description: 'List automation rules',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          enabled_only: { type: 'boolean', description: 'Only show enabled rules (default: false)' },
+        },
+      },
+    },
+    {
+      name: 'streamops_toggle_rule',
+      description: 'Enable or disable an automation rule',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          rule_id: { type: 'string', description: 'Rule ID' },
+          enabled: { type: 'boolean', description: 'Enable (true) or disable (false) the rule' },
+        },
+        required: ['rule_id', 'enabled']
+      },
+    },
+    {
+      name: 'streamops_obs_status',
+      description: 'Get OBS connection and recording status',
+      inputSchema: {
+        type: 'object',
+        properties: {},
+      },
+    },
+    {
+      name: 'streamops_start_recording',
+      description: 'Start OBS recording',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          client_name: { type: 'string', description: 'OBS client name (default: "Default OBS")' },
+        },
+      },
+    },
+    {
+      name: 'streamops_stop_recording',
+      description: 'Stop OBS recording',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          client_name: { type: 'string', description: 'OBS client name (default: "Default OBS")' },
+        },
+      },
+    },
+    {
+      name: 'streamops_get_resource_usage',
+      description: 'Get current CPU, GPU, memory, and disk usage',
+      inputSchema: {
+        type: 'object',
+        properties: {},
+      },
+    },
   ],
 }));
 
@@ -303,6 +397,122 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             ],
           };
         }
+      }
+
+      case 'streamops_create_job': {
+        const { asset_id, job_type, params = {} } = args;
+        
+        // Build job request based on type
+        const jobData = {
+          asset_id,
+          job_type,
+          metadata: params
+        };
+        
+        // Map job-specific parameters
+        if (job_type === 'remux' && params.container) {
+          jobData.metadata.output_format = params.container;
+        }
+        
+        const response = await api.post(`/assets/${asset_id}/jobs`, jobData);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(response.data, null, 2),
+            },
+          ],
+        };
+      }
+
+      case 'streamops_cancel_job': {
+        const response = await api.post(`/jobs/${args.job_id}/cancel`);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(response.data, null, 2),
+            },
+          ],
+        };
+      }
+
+      case 'streamops_list_rules': {
+        const params = {};
+        if (args.enabled_only) params.enabled = true;
+        
+        const response = await api.get('/rules/', { params });
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(response.data, null, 2),
+            },
+          ],
+        };
+      }
+
+      case 'streamops_toggle_rule': {
+        const { rule_id, enabled } = args;
+        const response = await api.patch(`/rules/${rule_id}`, { enabled });
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(response.data, null, 2),
+            },
+          ],
+        };
+      }
+
+      case 'streamops_obs_status': {
+        const response = await api.get('/obs/status');
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(response.data, null, 2),
+            },
+          ],
+        };
+      }
+
+      case 'streamops_start_recording': {
+        const client_name = args.client_name || 'Default OBS';
+        const response = await api.post(`/obs/clients/${encodeURIComponent(client_name)}/recording/start`);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(response.data, null, 2),
+            },
+          ],
+        };
+      }
+
+      case 'streamops_stop_recording': {
+        const client_name = args.client_name || 'Default OBS';
+        const response = await api.post(`/obs/clients/${encodeURIComponent(client_name)}/recording/stop`);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(response.data, null, 2),
+            },
+          ],
+        };
+      }
+
+      case 'streamops_get_resource_usage': {
+        const response = await api.get('/system/stats');
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(response.data, null, 2),
+            },
+          ],
+        };
       }
 
       default:

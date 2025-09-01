@@ -1423,11 +1423,37 @@ async def get_asset_detail(
 async def create_job(db, job_type: str, asset_id: str, metadata: dict) -> str:
     """Helper function to create a job in the database."""
     job_id = str(uuid.uuid4())
+    
+    # Insert into database as queued
     await db.execute("""
         INSERT INTO so_jobs (id, type, asset_id, payload_json, state, created_at, updated_at)
-        VALUES (?, ?, ?, ?, 'pending', datetime('now'), datetime('now'))
+        VALUES (?, ?, ?, ?, 'queued', datetime('now'), datetime('now'))
     """, (job_id, job_type, asset_id, json.dumps(metadata)))
     await db.commit()
+    
+    # Publish to NATS queue
+    try:
+        from app.api.services.nats_service import NATSService
+        nats = NATSService()
+        await nats.connect()
+        
+        # Map job types to NATS subjects
+        nats_type = job_type.replace('_', '').replace('ffmpeg', '')  # ffmpeg_remux -> remux
+        if nats_type == 'proxycreate':
+            nats_type = 'proxy'
+        elif nats_type == 'thumbsgenerate':
+            nats_type = 'thumbnail'
+            
+        await nats.publish_job(nats_type, {
+            "id": job_id,
+            "asset_id": asset_id,
+            **metadata
+        })
+        logger.info(f"Published job {job_id} to NATS queue: jobs.{nats_type}")
+    except Exception as e:
+        logger.error(f"Failed to publish job to NATS: {e}")
+        # Job is still in database, worker can pick it up later
+    
     return job_id
 
 

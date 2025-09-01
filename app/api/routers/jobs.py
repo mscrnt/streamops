@@ -207,7 +207,7 @@ async def list_jobs(
                 type=row_dict.get('type', ''),
                 asset_id=row_dict.get('asset_id'),
                 asset_name=os.path.basename(row_dict.get('asset_name', '')) if row_dict.get('asset_name') else None,
-                status='deferred' if row_dict.get('deferred') else row_dict.get('state', row_dict.get('status', 'unknown')),
+                state='deferred' if row_dict.get('deferred') else row_dict.get('state', row_dict.get('status', 'unknown')),
                 progress=progress * 100 if progress <= 1 else progress,
                 eta_sec=eta_sec,
                 created_at=row_dict.get('created_at', datetime.utcnow().isoformat()),

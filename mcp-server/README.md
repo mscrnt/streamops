@@ -20,12 +20,29 @@ claude mcp add streamops 'node /mnt/d/Projects/streamops/mcp-server/index.js'
 
 The MCP server provides these tools to Claude:
 
+### Asset Management
 - `streamops_list_assets` - List assets with filtering and pagination
 - `streamops_get_asset` - Get details for a specific asset
 - `streamops_list_recent_recordings` - List recent recordings from Recording folders
-- `streamops_list_jobs` - List jobs with filtering
+
+### Job Management
+- `streamops_list_jobs` - List jobs with filtering by state and type
+- `streamops_create_job` - Create a new processing job (remux, proxy, thumbnail, transcode)
+- `streamops_cancel_job` - Cancel a running or queued job
+
+### Rule Management
+- `streamops_list_rules` - List automation rules
+- `streamops_toggle_rule` - Enable or disable a specific rule
+
+### OBS Control
+- `streamops_obs_status` - Get OBS connection and recording status
+- `streamops_start_recording` - Start OBS recording
+- `streamops_stop_recording` - Stop OBS recording
+
+### System Monitoring
 - `streamops_get_system_summary` - Get system status summary
 - `streamops_get_drives_status` - Get status of all monitored drives
+- `streamops_get_resource_usage` - Get CPU, GPU, memory, and disk usage
 - `streamops_trigger_recording_update` - Trigger a manual update of recordings
 - `streamops_get_recent_events` - Get recent SSE events (for debugging)
 

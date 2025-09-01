@@ -287,26 +287,33 @@ class OBSManager:
             return
             
         try:
+            # TODO: Fix event handler registration for obsws-python 1.7.0
+            # The callback.register() method signature has changed
+            # For now, skip event handlers and rely on polling
+            logger.info(f"Event handlers disabled for {client.name} - using polling only")
+            return
+            
             loop = asyncio.get_event_loop()
             
             def register_handlers():
+                # For obsws-python, use on() method to register event handlers
                 # Recording events
-                client.event_client.callback.register(
-                    lambda data: asyncio.create_task(self._on_recording_started(client, data)),
-                    "RecordStateChanged"
-                )
+                def on_record_state(data):
+                    asyncio.create_task(self._on_recording_started(client, data))
                 
-                # Streaming events
-                client.event_client.callback.register(
-                    lambda data: asyncio.create_task(self._on_streaming_started(client, data)),
-                    "StreamStateChanged"
-                )
+                # Streaming events  
+                def on_stream_state(data):
+                    asyncio.create_task(self._on_streaming_started(client, data))
                 
                 # Scene changes
-                client.event_client.callback.register(
-                    lambda data: asyncio.create_task(self._on_scene_changed(client, data)),
-                    "CurrentProgramSceneChanged"
-                )
+                def on_scene_changed(data):
+                    asyncio.create_task(self._on_scene_changed(client, data))
+                
+                client.event_client.callback.register([
+                    on_record_state,
+                    on_stream_state,
+                    on_scene_changed
+                ])
             
             await loop.run_in_executor(None, register_handlers)
             logger.info(f"Event handlers registered for {client.name}")

@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional
 import asyncio
+import aiosqlite
 from ulid import ULID
 
 logger = logging.getLogger(__name__)
@@ -161,6 +162,54 @@ class IndexJob:
                 logger.info(f"Notified clients about new asset: {asset_id}")
             except Exception as e:
                 logger.debug(f"Could not notify about new asset: {e}")
+                
+            try:
+                # Trigger automation rules for new assets
+                from app.worker.rules.engine import RulesEngine
+                
+                # Get full asset data for rule evaluation
+                conn = await aiosqlite.connect("/data/db/streamops.db")
+                cursor = await conn.execute(
+                    "SELECT * FROM so_assets WHERE id = ?", (asset_id,)
+                )
+                row = await cursor.fetchone()
+                await conn.close()
+                
+                if row:
+                    # Convert row to dict
+                    columns = [col[0] for col in cursor.description]
+                    asset_data = dict(zip(columns, row))
+                    
+                    # Initialize rule engine
+                    from app.api.services.nats_service import NATSService
+                    nats = NATSService()
+                    await nats.connect()
+                    
+                    rule_engine = RulesEngine(nats_service=nats)
+                    await rule_engine.load_rules()
+                    
+                    # Create event data for rule evaluation
+                    event_data = {
+                        'asset_id': asset_id,
+                        'file_path': file_path,
+                        'path': file_path,  # Add path for rule engine compatibility
+                        'file': {
+                            'path': file_path,
+                            'name': Path(file_path).name,
+                            'extension': Path(file_path).suffix,
+                            'container': asset_data.get('container', ''),
+                            'size': asset_data.get('size', 0),
+                            'duration': asset_data.get('duration', 0),
+                        },
+                        **asset_data
+                    }
+                    
+                    # Evaluate rules with file_closed event
+                    await rule_engine.evaluate_event('file_closed', event_data)
+                    logger.info(f"Triggered rule evaluation for asset {asset_id}")
+                        
+            except Exception as e:
+                logger.error(f"Error triggering rules for asset {asset_id}: {e}")
         
         logger.info(f"Successfully {action} asset: {file_path} as {asset_id}")
         return {"success": True, "asset_id": asset_id, "action": action}

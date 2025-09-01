@@ -280,7 +280,7 @@ export default function Jobs() {
   // Get status badge
   const getStatusBadge = (job) => {
     // Handle both direct status string and job object
-    const status = typeof job === 'string' ? job : (job.deferred ? 'deferred' : job.status)
+    const status = typeof job === 'string' ? job : (job.deferred ? 'deferred' : (job.state || job.status))
     
     const variants = {
       queued: { variant: 'warning', icon: Clock },
@@ -303,10 +303,10 @@ export default function Jobs() {
     return (
       <Badge 
         variant={config.variant} 
-        className="capitalize"
+        className="capitalize font-semibold text-xs px-2.5 py-1"
         title={title}
       >
-        <Icon className={cn("w-3 h-3 mr-1", config.animate && "animate-spin")} />
+        <Icon className={cn("w-4 h-4 mr-1.5", config.animate && "animate-spin")} />
         {status}
       </Badge>
     )
@@ -347,7 +347,7 @@ export default function Jobs() {
     if (job.duration_sec) {
       return formatDuration(job.duration_sec)
     }
-    if (job.status === 'running' && job.started_at) {
+    if ((job.state || job.status) === 'running' && job.started_at) {
       const started = new Date(job.started_at)
       const now = new Date()
       const sec = Math.floor((now - started) / 1000)
@@ -728,7 +728,7 @@ export default function Jobs() {
                         </div>
                       </td>
                       <td className="p-3">
-                        {job.status === 'running' && job.progress > 0 ? (
+                        {(job.state || job.status) === 'running' && job.progress > 0 ? (
                           <div className="w-32">
                             <div className="flex items-center gap-2 mb-1">
                               <span className="text-sm font-medium">
@@ -815,7 +815,7 @@ export default function Jobs() {
                                   Force Run Now
                                 </button>
                               )}
-                              {job.status === 'failed' && (
+                              {(job.state || job.status) === 'failed' && (
                                 <button
                                   className="w-full px-3 py-2 text-sm text-left hover:bg-accent hover:text-accent-foreground"
                                   onClick={(e) => {
@@ -828,7 +828,7 @@ export default function Jobs() {
                                   Retry
                                 </button>
                               )}
-                              {['queued', 'running'].includes(job.status) && (
+                              {['queued', 'running'].includes(job.state || job.status) && (
                                 <button
                                   className="w-full px-3 py-2 text-sm text-left hover:bg-accent hover:text-accent-foreground"
                                   onClick={(e) => {
@@ -841,7 +841,7 @@ export default function Jobs() {
                                   Cancel
                                 </button>
                               )}
-                              {['completed', 'failed', 'canceled'].includes(job.status) && (
+                              {['completed', 'failed', 'canceled'].includes(job.state || job.status) && (
                                 <button
                                   className="w-full px-3 py-2 text-sm text-left hover:bg-accent hover:text-accent-foreground text-destructive"
                                   onClick={(e) => {

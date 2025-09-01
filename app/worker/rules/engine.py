@@ -21,28 +21,65 @@ class RulesEngine:
         
     async def load_rules(self):
         """Load rules from database"""
-        from app.api.db.database import get_db
+        import sqlite3
         
         try:
-            db = await get_db()
-            async with db.execute(
-                """
-                SELECT id, name, priority, when_json, do_json 
+            # Use direct SQLite connection instead of async
+            conn = sqlite3.connect("/data/db/streamops.db")
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT id, name, priority, trigger_json, conditions_json, 
+                       actions_json, guardrails_json, quiet_period_sec
                 FROM so_rules 
                 WHERE enabled = 1 
                 ORDER BY priority DESC, created_at ASC
-                """
-            ) as cursor:
-                rows = await cursor.fetchall()
+            """)
+            
+            rows = cursor.fetchall()
+            conn.close()
                 
             self.rules = []
             for row in rows:
+                # Convert new format to old format for compatibility
+                trigger = json.loads(row['trigger_json']) if row['trigger_json'] else {}
+                conditions = json.loads(row['conditions_json']) if row['conditions_json'] else []
+                actions = json.loads(row['actions_json']) if row['actions_json'] else []
+                guardrails = json.loads(row['guardrails_json']) if row['guardrails_json'] else {}
+                
+                # Build when_conditions in expected format
+                when_conditions = {
+                    'event': trigger.get('type', 'file_closed'),
+                    'conditions': {}
+                }
+                
+                # Convert conditions to old format
+                for condition in conditions:
+                    field = condition.get('field', '')
+                    op = condition.get('op', '')
+                    value = condition.get('value', '')
+                    
+                    # Map to expected format
+                    if field and op and value:
+                        when_conditions['conditions'][field] = value
+                
+                # Convert actions to expected format  
+                do_actions = []
+                for action in actions:
+                    if isinstance(action, dict):
+                        for action_type, params in action.items():
+                            do_actions.append({
+                                'type': action_type,
+                                'params': params if isinstance(params, dict) else {}
+                            })
+                
                 rule = Rule(
-                    id=row[0],
-                    name=row[1],
-                    priority=row[2],
-                    when_conditions=json.loads(row[3]),
-                    do_actions=json.loads(row[4])
+                    id=row['id'],
+                    name=row['name'],
+                    priority=row['priority'],
+                    when_conditions=when_conditions,
+                    do_actions=do_actions
                 )
                 self.rules.append(rule)
             
@@ -90,7 +127,7 @@ class RulesEngine:
             await self._action_copy(params, context)
         elif action_type == "index_asset":
             await self._action_index(params, context)
-        elif action_type == "make_proxies_if":
+        elif action_type in ["make_proxies_if", "proxy"]:  # Support both names
             await self._action_proxy(params, context)
         elif action_type == "thumbs":
             await self._action_thumbnail(params, context)
@@ -110,22 +147,56 @@ class RulesEngine:
         if not self.nats:
             return
         
+        job_id = self._generate_job_id("remux")
+        asset_id = context.get("asset_id", "")
+        
+        # Save job to database first
+        try:
+            import aiosqlite
+            import json
+            from datetime import datetime
+            
+            conn = await aiosqlite.connect("/data/db/streamops.db")
+            
+            # Insert job into database
+            await conn.execute("""
+                INSERT INTO so_jobs (id, type, asset_id, payload_json, state, created_at, updated_at)
+                VALUES (?, ?, ?, ?, 'queued', ?, ?)
+            """, (
+                job_id,
+                "ffmpeg_remux",  # Use full type name for database
+                asset_id,
+                json.dumps({
+                    "output_format": params.get("container", "mov"),
+                    "faststart": params.get("faststart", True)
+                }),
+                datetime.utcnow().isoformat(),
+                datetime.utcnow().isoformat()
+            ))
+            await conn.commit()
+            await conn.close()
+            
+            logger.info(f"Created job {job_id} in database")
+        except Exception as e:
+            logger.error(f"Failed to save job to database: {e}")
+        
+        # Publish to NATS
         job_data = {
-            "id": self._generate_job_id("remux"),
+            "id": job_id,
             "input_path": context.get("path"),
             "output_format": params.get("container", "mov"),
             "faststart": params.get("faststart", True)
         }
         
         await self.nats.publish_job("remux", job_data)
-        logger.info(f"Queued remux job: {job_data['id']}")
+        logger.info(f"Queued remux job: {job_id}")
     
     async def _action_move(self, params: Dict[str, Any], context: Dict[str, Any]):
         """Execute move action"""
         import shutil
         
         source = Path(context.get("path"))
-        dest_pattern = params.get("dest")
+        dest_pattern = params.get("dest") or params.get("target")  # Support both dest and target
         
         if not source.exists() or not dest_pattern:
             return
@@ -149,7 +220,7 @@ class RulesEngine:
         import shutil
         
         source = Path(context.get("path"))
-        dest_pattern = params.get("dest")
+        dest_pattern = params.get("dest") or params.get("target")  # Support both dest and target
         
         if not source.exists() or not dest_pattern:
             return
@@ -191,14 +262,47 @@ class RulesEngine:
             logger.debug(f"Skipping proxy - duration {duration}s < {min_duration}s")
             return
         
+        job_id = self._generate_job_id("proxy")
+        asset_id = context.get("asset_id", "")
+        
+        # Save job to database first
+        try:
+            import aiosqlite
+            import json
+            from datetime import datetime
+            
+            conn = await aiosqlite.connect("/data/db/streamops.db")
+            
+            # Insert job into database
+            await conn.execute("""
+                INSERT INTO so_jobs (id, type, asset_id, payload_json, state, created_at, updated_at)
+                VALUES (?, ?, ?, ?, 'queued', ?, ?)
+            """, (
+                job_id,
+                "proxy_create",  # Use correct type name for database
+                asset_id,
+                json.dumps({
+                    "codec": params.get("codec", "dnxhr_lb")
+                }),
+                datetime.utcnow().isoformat(),
+                datetime.utcnow().isoformat()
+            ))
+            await conn.commit()
+            await conn.close()
+            
+            logger.info(f"Created proxy job {job_id} in database")
+        except Exception as e:
+            logger.error(f"Failed to save proxy job to database: {e}")
+        
+        # Publish to NATS
         job_data = {
-            "id": self._generate_job_id("proxy"),
+            "id": job_id,
             "input_path": context.get("path"),
             "codec": params.get("codec", "dnxhr_lb")
         }
         
         await self.nats.publish_job("proxy", job_data)
-        logger.info(f"Queued proxy job: {job_data['id']}")
+        logger.info(f"Queued proxy job: {job_id}")
     
     async def _action_thumbnail(self, params: Dict[str, Any], context: Dict[str, Any]):
         """Execute thumbnail generation action"""
@@ -267,12 +371,16 @@ class RulesEngine:
     async def _action_overlay(self, params: Dict[str, Any], context: Dict[str, Any]):
         """Execute overlay update action"""
         # Implement overlay updates
-                    overlay_id = action.get('overlay_id')
-                    if overlay_id:
-                        from app.api.services.overlay_service import update_overlay
-                        await update_overlay(overlay_id, action.get('content', {}))
-                        logger.info(f"Updated overlay {overlay_id}")
-        pass
+        overlay_id = params.get('overlay_id')
+        if overlay_id:
+            try:
+                from app.api.services.overlay_service import update_overlay
+                await update_overlay(overlay_id, params.get('content', {}))
+                logger.info(f"Updated overlay {overlay_id}")
+            except ImportError:
+                logger.warning("Overlay service not available")
+            except Exception as e:
+                logger.error(f"Failed to update overlay: {e}")
     
     async def _action_custom_hook(self, params: Dict[str, Any], context: Dict[str, Any]):
         """Execute custom hook action"""
@@ -307,8 +415,17 @@ class RulesEngine:
             # Replace date variables
             now = datetime.now()
             value = value.replace("{YYYY}", now.strftime("%Y"))
+            value = value.replace("{year}", now.strftime("%Y"))
             value = value.replace("{MM}", now.strftime("%m"))
+            value = value.replace("{month}", now.strftime("%m"))
             value = value.replace("{DD}", now.strftime("%d"))
+            value = value.replace("{day}", now.strftime("%d"))
+            
+            # Replace filename variable
+            if "{filename}" in value:
+                source_path = Path(context.get("path", context.get("file_path", "")))
+                if source_path:
+                    value = value.replace("{filename}", source_path.name)
             
             return value
         elif isinstance(value, dict):
@@ -394,7 +511,18 @@ class Rule:
     
     def _check_condition(self, key: str, expected: Any, data: Dict[str, Any]) -> bool:
         """Check a single condition"""
-        actual = data.get(key)
+        # Handle nested keys like 'file.extension'
+        if '.' in key:
+            parts = key.split('.')
+            actual = data
+            for part in parts:
+                if isinstance(actual, dict):
+                    actual = actual.get(part)
+                else:
+                    actual = None
+                    break
+        else:
+            actual = data.get(key)
         
         if isinstance(expected, dict):
             # Complex condition (e.g., {"$gte": 100})
@@ -416,7 +544,9 @@ class Rule:
             elif operator == "$regex":
                 return bool(re.match(value, str(actual)))
         else:
-            # Simple equality check
+            # Simple equality check - handle case-insensitive for strings
+            if isinstance(actual, str) and isinstance(expected, str):
+                return actual.lower() == expected.lower()
             return actual == expected
         
         return False
