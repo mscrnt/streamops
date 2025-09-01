@@ -504,7 +504,11 @@ async def list_rules(
 ) -> RuleListResponse:
     """List all rules with pagination"""
     try:
-        query = "SELECT * FROM so_rules WHERE 1=1"
+        query = """SELECT 
+            id, name, enabled, priority, trigger_json, conditions_json,
+            actions_json, quiet_period_sec, active_hours_json, guardrails_json,
+            meta_json, last_triggered, last_error, created_at, updated_at
+            FROM so_rules WHERE 1=1"""
         params = []
         
         if enabled is not None:
@@ -512,8 +516,12 @@ async def list_rules(
             params.append(1 if enabled else 0)
         
         # Count total
-        count_query = query.replace("SELECT *", "SELECT COUNT(*)", 1)
-        cursor = await db.execute(count_query, params)
+        count_query = "SELECT COUNT(*) FROM so_rules WHERE 1=1"
+        count_params = []  
+        if enabled is not None:
+            count_query += " AND enabled = ?"
+            count_params.append(1 if enabled else 0)
+        cursor = await db.execute(count_query, count_params)
         total = (await cursor.fetchone())[0]
         
         # Get paginated results
@@ -533,14 +541,14 @@ async def list_rules(
                 "trigger": json.loads(row[4]) if row[4] else {"type": "manual"},
                 "when": json.loads(row[5]) if row[5] else [],
                 "do": json.loads(row[6]) if row[6] else [],
-                "quiet_period_sec": row[7] if len(row) > 7 and row[7] is not None else 45,
-                "active_hours": json.loads(row[8]) if len(row) > 8 and row[8] else None,
-                "guardrails": json.loads(row[9]) if len(row) > 9 and row[9] else {},
-                "meta": json.loads(row[10]) if len(row) > 10 and row[10] else {},
-                "last_triggered": row[11] if len(row) > 11 else None,
-                "last_error": row[12] if len(row) > 12 else None,
-                "created_at": row[13] if len(row) > 13 else datetime.utcnow().isoformat(),
-                "updated_at": row[14] if len(row) > 14 else datetime.utcnow().isoformat()
+                "quiet_period_sec": row[7] if row[7] is not None else 45,
+                "active_hours": json.loads(row[8]) if row[8] else None,
+                "guardrails": json.loads(row[9]) if row[9] else {},
+                "meta": json.loads(row[10]) if row[10] else {},
+                "last_triggered": row[11],
+                "last_error": row[12],
+                "created_at": row[13] if row[13] else datetime.utcnow().isoformat(),
+                "updated_at": row[14] if row[14] else datetime.utcnow().isoformat()
             }
             rules.append(RuleResponse(**rule))
         
@@ -553,7 +561,11 @@ async def list_rules(
 async def get_rule(rule_id: str, db=Depends(get_db)) -> RuleResponse:
     """Get a specific rule by ID"""
     try:
-        cursor = await db.execute("SELECT * FROM so_rules WHERE id = ?", (rule_id,))
+        cursor = await db.execute("""SELECT 
+            id, name, enabled, priority, trigger_json, conditions_json,
+            actions_json, quiet_period_sec, active_hours_json, guardrails_json,
+            meta_json, last_triggered, last_error, created_at, updated_at
+            FROM so_rules WHERE id = ?""", (rule_id,))
         row = await cursor.fetchone()
         
         if not row:
@@ -567,14 +579,14 @@ async def get_rule(rule_id: str, db=Depends(get_db)) -> RuleResponse:
             "trigger": json.loads(row[4]) if row[4] else {"type": "manual"},
             "when": json.loads(row[5]) if row[5] else [],
             "do": json.loads(row[6]) if row[6] else [],
-            "quiet_period_sec": row[7] if len(row) > 7 and row[7] is not None else 45,
-            "active_hours": json.loads(row[8]) if len(row) > 8 and row[8] else None,
-            "guardrails": json.loads(row[9]) if len(row) > 9 and row[9] else {},
-            "meta": json.loads(row[10]) if len(row) > 10 and row[10] else {},
-            "last_triggered": row[11] if len(row) > 11 else None,
-            "last_error": row[12] if len(row) > 12 else None,
-            "created_at": row[13] if len(row) > 13 else datetime.utcnow().isoformat(),
-            "updated_at": row[14] if len(row) > 14 else datetime.utcnow().isoformat()
+            "quiet_period_sec": row[7] if row[7] is not None else 45,
+            "active_hours": json.loads(row[8]) if row[8] else None,
+            "guardrails": json.loads(row[9]) if row[9] else {},
+            "meta": json.loads(row[10]) if row[10] else {},
+            "last_triggered": row[11],
+            "last_error": row[12],
+            "created_at": row[13] if row[13] else datetime.utcnow().isoformat(),
+            "updated_at": row[14] if row[14] else datetime.utcnow().isoformat()
         }
         
         return RuleResponse(**rule)
@@ -591,29 +603,7 @@ async def create_rule(rule: RuleCreate, db=Depends(get_db)) -> RuleResponse:
         rule_id = str(uuid.uuid4())
         now = datetime.utcnow().isoformat()
         
-        # Ensure columns exist (migration might not have run)
-        try:
-            await db.execute("""
-                ALTER TABLE so_rules ADD COLUMN quiet_period_sec INTEGER DEFAULT 45
-            """)
-            await db.execute("""
-                ALTER TABLE so_rules ADD COLUMN active_hours_json TEXT
-            """)
-            await db.execute("""
-                ALTER TABLE so_rules ADD COLUMN guardrails_json TEXT
-            """)
-            await db.execute("""
-                ALTER TABLE so_rules ADD COLUMN meta_json TEXT
-            """)
-            await db.execute("""
-                ALTER TABLE so_rules ADD COLUMN last_triggered TIMESTAMP
-            """)
-            await db.execute("""
-                ALTER TABLE so_rules ADD COLUMN last_error TEXT
-            """)
-            await db.commit()
-        except:
-            pass  # Columns already exist
+        # Columns are now part of the main schema in database.py
         
         # Insert rule
         await db.execute("""

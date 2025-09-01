@@ -40,7 +40,7 @@ export default function Rules() {
   const { data: rulesData, isLoading } = useQuery({
     queryKey: ['rules'],
     queryFn: async () => {
-      const response = await api.get('/rules')
+      const response = await api.get('/rules/')
       return response.data
     }
   })
@@ -57,20 +57,32 @@ export default function Rules() {
   // Create rule mutation
   const createMutation = useMutation({
     mutationFn: async (ruleData) => {
+      // Transform data to API format
+      const apiData = {
+        name: ruleData.name,
+        enabled: true,
+        priority: ruleData.priority || 50,
+        trigger: { type: 'file_closed' },
+        when: ruleData.conditions.map(c => ({
+          field: c.field,
+          op: c.operator,
+          value: c.value
+        })),
+        quiet_period_sec: ruleData.quiet_period_sec || 45,
+        guardrails: ruleData.guardrails,
+        do: ruleData.actions.map(a => ({
+          [a.type]: a.parameters || {}
+        }))
+      }
+      
       // First compile the rule
-      const compileResponse = await api.post('/rules/compile', ruleData)
+      const compileResponse = await api.post('/rules/compile', apiData)
       if (!compileResponse.data.valid) {
         throw new Error('Invalid rule configuration')
       }
       
-      // Then create it
-      const response = await api.post('/rules', {
-        name: compileResponse.data.compiled.name,
-        description: compileResponse.data.compiled.description,
-        enabled: true,
-        priority: compileResponse.data.compiled.priority,
-        rule_json: compileResponse.data.compiled
-      })
+      // Then create it - send the rule fields directly
+      const response = await api.post('/rules/', compileResponse.data.rule)
       return response.data
     },
     onSuccess: () => {

@@ -21,49 +21,49 @@ import { Badge } from '@/components/ui/Badge'
 import { useApi } from '@/hooks/useApi'
 import { SimpleSelect } from '@/components/ui/Select'
 
-// Condition field options
+// Condition field options - must match API's RULE_METADATA fields
 const CONDITION_FIELDS = [
   { value: 'file.extension', label: 'File Extension', type: 'select', options: ['.mkv', '.mp4', '.mov', '.avi', '.flv', '.ts'] },
-  { value: 'file.size_mb', label: 'File Size (MB)', type: 'number' },
+  { value: 'file.size', label: 'File Size', type: 'number' },
   { value: 'file.duration_sec', label: 'Duration (seconds)', type: 'number' },
-  { value: 'file.age_days', label: 'File Age (days)', type: 'number' },
-  { value: 'file.name', label: 'File Name', type: 'text' },
-  { value: 'file.path', label: 'File Path', type: 'path' },
-  { value: 'event.type', label: 'Event Type', type: 'select', options: ['file.closed', 'file.created', 'asset.indexed'] },
-  { value: 'asset.type', label: 'Asset Type', type: 'select', options: ['video', 'audio', 'image'] },
-  { value: 'asset.has_proxy', label: 'Has Proxy', type: 'boolean' },
-  { value: 'asset.has_thumbnails', label: 'Has Thumbnails', type: 'boolean' }
+  { value: 'file.container', label: 'Container Format', type: 'select', options: ['matroska', 'mp4', 'mov', 'avi'] },
+  { value: 'file.video_codec', label: 'Video Codec', type: 'select', options: ['h264', 'h265', 'vp9', 'av1'] },
+  { value: 'file.audio_codec', label: 'Audio Codec', type: 'select', options: ['aac', 'mp3', 'opus', 'flac'] },
+  { value: 'file.width', label: 'Video Width', type: 'number' },
+  { value: 'file.height', label: 'Video Height', type: 'number' },
+  { value: 'file.fps', label: 'Frame Rate', type: 'number' },
+  { value: 'path.abs', label: 'File Path', type: 'path' },
+  { value: 'path.glob', label: 'Path Pattern', type: 'text' },
+  { value: 'tags.contains', label: 'Has Tag', type: 'text' },
+  { value: 'older_than_days', label: 'Age (days)', type: 'number' }
 ]
 
-// Operator options based on field type
+// Operator options based on field type - must match API's RULE_METADATA operators
 const OPERATORS = {
   text: [
-    { value: '=', label: 'equals' },
-    { value: '!=', label: 'not equals' },
+    { value: 'equals', label: 'equals' },
     { value: 'contains', label: 'contains' },
-    { value: 'starts_with', label: 'starts with' },
-    { value: 'ends_with', label: 'ends with' }
+    { value: 'regex', label: 'matches regex' },
+    { value: 'matches', label: 'matches pattern' }
   ],
   number: [
-    { value: '=', label: 'equals' },
-    { value: '!=', label: 'not equals' },
-    { value: '>', label: 'greater than' },
-    { value: '>=', label: 'greater or equal' },
-    { value: '<', label: 'less than' },
-    { value: '<=', label: 'less or equal' }
+    { value: 'equals', label: 'equals' },
+    { value: 'gt', label: 'greater than' },
+    { value: 'gte', label: 'greater or equal' },
+    { value: 'lt', label: 'less than' },
+    { value: 'lte', label: 'less or equal' }
   ],
   select: [
-    { value: '=', label: 'is' },
-    { value: '!=', label: 'is not' },
+    { value: 'equals', label: 'is' },
     { value: 'in', label: 'is one of' }
   ],
   boolean: [
-    { value: '=', label: 'is' }
+    { value: 'equals', label: 'is' }
   ],
   path: [
-    { value: '=', label: 'equals' },
+    { value: 'equals', label: 'equals' },
     { value: 'contains', label: 'contains' },
-    { value: 'starts_with', label: 'starts with' }
+    { value: 'matches', label: 'matches pattern' }
   ]
 }
 
@@ -73,12 +73,55 @@ const ACTION_TYPES = [
   { value: 'move', label: 'Move File', icon: '📁' },
   { value: 'copy', label: 'Copy File', icon: '📋' },
   { value: 'proxy', label: 'Create Proxy', icon: '🎬' },
-  { value: 'thumbs', label: 'Generate Thumbnails', icon: '🖼️' },
+  { value: 'thumbnail', label: 'Generate Thumbnails', icon: '🖼️' },
   { value: 'transcode', label: 'Transcode', icon: '🎥' },
   { value: 'tag', label: 'Add Tag', icon: '🏷️' },
   { value: 'webhook', label: 'Call Webhook', icon: '🔗' },
   { value: 'archive', label: 'Archive', icon: '📦' }
 ]
+
+// Preset templates with conditions and actions
+const PRESET_TEMPLATES = {
+  'remux_move_proxy': {
+    conditions: [
+      { field: 'file.extension', operator: 'equals', value: '.mkv' },
+      { field: 'file.container', operator: 'equals', value: 'matroska' }
+    ],
+    actions: [
+      { type: 'ffmpeg_remux', parameters: { container: 'mov', faststart: true } },
+      { type: 'move', parameters: { target: '' } }, // Will be selected from roles dropdown
+      { type: 'proxy', parameters: { codec: 'dnxhr_lb', if_duration_gt: 900 } }
+    ]
+  },
+  'generate_thumbnails': {
+    conditions: [
+      { field: 'file.extension', operator: 'in', value: ['.mp4', '.mov', '.mkv', '.avi'] },
+      { field: 'file.duration_sec', operator: 'gt', value: 10 }
+    ],
+    actions: [
+      { type: 'thumbnail', parameters: { poster: true, sprite: true, hover: true } }
+    ]
+  },
+  'archive_old': {
+    conditions: [
+      { field: 'older_than_days', operator: 'gt', value: 30 },
+      { field: 'path.abs', operator: 'contains', value: '/Recording' }
+    ],
+    actions: [
+      { type: 'move', parameters: { target: '' } } // Will be selected from roles dropdown
+    ]
+  },
+  'transcode_youtube': {
+    conditions: [
+      { field: 'file.extension', operator: 'in', value: ['.mkv', '.mov', '.mp4'] },
+      { field: 'file.width', operator: 'gte', value: 1920 }
+    ],
+    actions: [
+      { type: 'transcode', parameters: { preset: 'youtube_1080p' } },
+      { type: 'copy', parameters: { target: '' } } // Will be selected from roles dropdown
+    ]
+  }
+}
 
 export default function RuleComposer({ preset, rule, onSave, onCancel, saving }) {
   const { api } = useApi()
@@ -88,6 +131,15 @@ export default function RuleComposer({ preset, rule, onSave, onCancel, saving })
     queryKey: ['system', 'mounts'],
     queryFn: async () => {
       const response = await api.get('/system/mounts')
+      return response.data
+    }
+  })
+  
+  // Get available drives with roles for target path selection
+  const { data: drives } = useQuery({
+    queryKey: ['drives', 'status'],
+    queryFn: async () => {
+      const response = await api.get('/drives/status')
       return response.data
     }
   })
@@ -104,23 +156,26 @@ export default function RuleComposer({ preset, rule, onSave, onCancel, saving })
         condition_logic: 'all',
         actions: [], // Parse from rule.rule_json.do
         guardrails: rule.rule_json?.guardrails || {},
-        schedule: rule.schedule || ''
+        schedule: rule.schedule || '',
+        quiet_period_sec: rule.quiet_period_sec || 45
       }
     } else if (preset) {
-      // Creating from preset
+      // Creating from preset - load template conditions and actions
+      const template = PRESET_TEMPLATES[preset.id] || { conditions: [], actions: [] }
       return {
         name: preset.label,
         description: preset.description,
         priority: 100,
-        conditions: [],
+        conditions: template.conditions || [],
         condition_logic: 'all',
-        actions: [],
+        actions: template.actions || [],
         guardrails: {
           pause_if_recording: true,
           pause_if_gpu_pct_above: 40,
           pause_if_cpu_pct_above: 70
         },
-        schedule: ''
+        schedule: '',
+        quiet_period_sec: 45
       }
     } else {
       // Creating custom
@@ -136,7 +191,8 @@ export default function RuleComposer({ preset, rule, onSave, onCancel, saving })
           pause_if_gpu_pct_above: 40,
           pause_if_cpu_pct_above: 70
         },
-        schedule: ''
+        schedule: '',
+        quiet_period_sec: 45
       }
     }
   })
@@ -216,6 +272,28 @@ export default function RuleComposer({ preset, rule, onSave, onCancel, saving })
       }))
   }
   
+  // Get available target paths from drives with roles
+  const getTargetPaths = () => {
+    if (!drives || drives.length === 0) return []
+    
+    const paths = []
+    drives.forEach(drive => {
+      if (drive.rw && drive.role_details) {
+        drive.role_details.forEach(role => {
+          // Skip recording role as it's typically for input
+          if (role.role !== 'recording') {
+            paths.push({
+              value: role.path,
+              label: `${drive.label} - ${role.role.charAt(0).toUpperCase() + role.role.slice(1)}`,
+              role: role.role
+            })
+          }
+        })
+      }
+    })
+    return paths
+  }
+  
   // Render condition value input based on type
   const renderConditionValue = (condition, index) => {
     const fieldType = getFieldType(condition.field)
@@ -248,25 +326,23 @@ export default function RuleComposer({ preset, rule, onSave, onCancel, saving })
         return (
           <SimpleSelect
             value={condition.value}
-            onChange={(value) => updateCondition(index, { value })}
+            onValueChange={(value) => updateCondition(index, { value })}
+            options={fieldDef.options.map(opt => ({ value: opt, label: opt }))}
             className="w-40"
-          >
-            {fieldDef.options.map(opt => (
-              <option key={opt} value={opt}>{opt}</option>
-            ))}
-          </SimpleSelect>
+          />
         )
       }
     } else if (fieldType === 'boolean') {
       return (
         <SimpleSelect
-          value={condition.value}
-          onChange={(value) => updateCondition(index, { value: value === 'true' })}
+          value={String(condition.value)}
+          onValueChange={(value) => updateCondition(index, { value: value === 'true' })}
+          options={[
+            { value: 'true', label: 'Yes' },
+            { value: 'false', label: 'No' }
+          ]}
           className="w-32"
-        >
-          <option value="true">Yes</option>
-          <option value="false">No</option>
-        </SimpleSelect>
+        />
       )
     } else if (fieldType === 'number') {
       return (
@@ -282,15 +358,15 @@ export default function RuleComposer({ preset, rule, onSave, onCancel, saving })
       return (
         <div className="flex items-center space-x-2">
           <SimpleSelect
-            value={condition.value}
-            onChange={(value) => updateCondition(index, { value })}
+            value={condition.value || 'none'}
+            onValueChange={(value) => updateCondition(index, { value: value === 'none' ? '' : value })}
+            options={[
+              { value: 'none', label: 'Select path...' },
+              ...paths
+            ]}
+            placeholder="Select path..."
             className="w-48"
-          >
-            <option value="">Select path...</option>
-            {paths.map(p => (
-              <option key={p.value} value={p.value}>{p.label}</option>
-            ))}
-          </SimpleSelect>
+          />
         </div>
       )
     } else {
@@ -308,7 +384,7 @@ export default function RuleComposer({ preset, rule, onSave, onCancel, saving })
   
   // Render action parameters based on type
   const renderActionParameters = (action, index) => {
-    const paths = getAvailablePaths()
+    const targetPaths = getTargetPaths()
     
     switch (action.type) {
       case 'ffmpeg_remux':
@@ -318,15 +394,16 @@ export default function RuleComposer({ preset, rule, onSave, onCancel, saving })
               <label className="text-sm w-24">Container:</label>
               <SimpleSelect
                 value={action.parameters.container || 'mov'}
-                onChange={(value) => updateAction(index, { 
+                onValueChange={(value) => updateAction(index, { 
                   parameters: { ...action.parameters, container: value }
                 })}
+                options={[
+                  { value: 'mov', label: 'MOV' },
+                  { value: 'mp4', label: 'MP4' },
+                  { value: 'mkv', label: 'MKV' }
+                ]}
                 className="w-32"
-              >
-                <option value="mov">MOV</option>
-                <option value="mp4">MP4</option>
-                <option value="mkv">MKV</option>
-              </SimpleSelect>
+              />
             </div>
             <div className="flex items-center space-x-2">
               <label className="text-sm w-24">Fast Start:</label>
@@ -348,19 +425,20 @@ export default function RuleComposer({ preset, rule, onSave, onCancel, saving })
             <div className="flex items-center space-x-2">
               <label className="text-sm w-24">Target:</label>
               <SimpleSelect
-                value={action.parameters.target || ''}
-                onChange={(value) => updateAction(index, { 
-                  parameters: { ...action.parameters, target: value }
+                value={action.parameters.target || 'none'}
+                onValueChange={(value) => updateAction(index, { 
+                  parameters: { ...action.parameters, target: value === 'none' ? '' : value }
                 })}
+                options={[
+                  { value: 'none', label: 'Select target folder...' },
+                  ...targetPaths.map(p => ({
+                    value: `${p.value}/{year}/{month}/{filename}`,
+                    label: `${p.label}`
+                  }))
+                ]}
+                placeholder="Select target folder..."
                 className="flex-1"
-              >
-                <option value="">Select target folder...</option>
-                {paths.map(p => (
-                  <option key={p.value} value={`${p.value}/{date}/{filename}`}>
-                    {p.label} / {'{date}'} / {'{filename}'}
-                  </option>
-                ))}
-              </SimpleSelect>
+              />
             </div>
             <p className="text-xs text-muted-foreground">
               Variables: {'{date}'}, {'{year}'}, {'{month}'}, {'{filename}'}
@@ -375,16 +453,17 @@ export default function RuleComposer({ preset, rule, onSave, onCancel, saving })
               <label className="text-sm w-32">Codec:</label>
               <SimpleSelect
                 value={action.parameters.codec || 'dnxhr_lb'}
-                onChange={(value) => updateAction(index, { 
+                onValueChange={(value) => updateAction(index, { 
                   parameters: { ...action.parameters, codec: value }
                 })}
+                options={[
+                  { value: 'dnxhr_lb', label: 'DNxHR LB' },
+                  { value: 'dnxhr_sq', label: 'DNxHR SQ' },
+                  { value: 'prores_proxy', label: 'ProRes Proxy' },
+                  { value: 'h264_proxy', label: 'H.264 Proxy' }
+                ]}
                 className="w-40"
-              >
-                <option value="dnxhr_lb">DNxHR LB</option>
-                <option value="dnxhr_sq">DNxHR SQ</option>
-                <option value="prores_proxy">ProRes Proxy</option>
-                <option value="h264_proxy">H.264 Proxy</option>
-              </SimpleSelect>
+              />
             </div>
             <div className="flex items-center space-x-2">
               <label className="text-sm w-32">Min Duration:</label>
@@ -401,7 +480,7 @@ export default function RuleComposer({ preset, rule, onSave, onCancel, saving })
           </div>
         )
         
-      case 'thumbs':
+      case 'thumbnail':
         return (
           <div className="space-y-2 mt-2 p-3 bg-muted/50 rounded-lg">
             <div className="flex items-center space-x-4">
@@ -532,12 +611,13 @@ export default function RuleComposer({ preset, rule, onSave, onCancel, saving })
                 <span className="text-sm font-medium">Match:</span>
                 <SimpleSelect
                   value={ruleData.condition_logic}
-                  onChange={(value) => setRuleData(prev => ({ ...prev, condition_logic: value }))}
+                  onValueChange={(value) => setRuleData(prev => ({ ...prev, condition_logic: value }))}
+                  options={[
+                    { value: 'all', label: 'All conditions' },
+                    { value: 'any', label: 'Any condition' }
+                  ]}
                   className="w-32"
-                >
-                  <option value="all">All conditions</option>
-                  <option value="any">Any condition</option>
-                </SimpleSelect>
+                />
               </label>
             </div>
           )}
@@ -551,23 +631,17 @@ export default function RuleComposer({ preset, rule, onSave, onCancel, saving })
                 <div key={index} className="flex items-center space-x-2 p-3 bg-muted/30 rounded-lg">
                   <SimpleSelect
                     value={condition.field}
-                    onChange={(value) => updateCondition(index, { field: value })}
+                    onValueChange={(value) => updateCondition(index, { field: value })}
+                    options={CONDITION_FIELDS.map(f => ({ value: f.value, label: f.label }))}
                     className="w-48"
-                  >
-                    {CONDITION_FIELDS.map(f => (
-                      <option key={f.value} value={f.value}>{f.label}</option>
-                    ))}
-                  </SimpleSelect>
+                  />
                   
                   <SimpleSelect
                     value={condition.operator}
-                    onChange={(value) => updateCondition(index, { operator: value })}
+                    onValueChange={(value) => updateCondition(index, { operator: value })}
+                    options={operators}
                     className="w-32"
-                  >
-                    {operators.map(op => (
-                      <option key={op.value} value={op.value}>{op.label}</option>
-                    ))}
-                  </SimpleSelect>
+                  />
                   
                   {renderConditionValue(condition, index)}
                   
@@ -615,15 +689,10 @@ export default function RuleComposer({ preset, rule, onSave, onCancel, saving })
                     <span className="text-2xl">{actionDef?.icon}</span>
                     <SimpleSelect
                       value={action.type}
-                      onChange={(value) => updateAction(index, { type: value, parameters: {} })}
+                      onValueChange={(value) => updateAction(index, { type: value, parameters: {} })}
+                      options={ACTION_TYPES.map(a => ({ value: a.value, label: a.label }))}
                       className="flex-1"
-                    >
-                      {ACTION_TYPES.map(a => (
-                        <option key={a.value} value={a.value}>
-                          {a.label}
-                        </option>
-                      ))}
-                    </SimpleSelect>
+                    />
                     <Button
                       variant="ghost"
                       size="sm"
@@ -671,6 +740,26 @@ export default function RuleComposer({ preset, rule, onSave, onCancel, saving })
                 }))}
               />
             </label>
+            
+            {ruleData.guardrails.pause_if_recording && (
+              <div className="flex items-center justify-between ml-6">
+                <span className="text-sm text-muted-foreground">Wait time after recording stops</span>
+                <div className="flex items-center space-x-2">
+                  <Input
+                    type="number"
+                    value={ruleData.quiet_period_sec || 45}
+                    onChange={(e) => setRuleData(prev => ({ 
+                      ...prev, 
+                      quiet_period_sec: parseInt(e.target.value) || 45
+                    }))}
+                    className="w-20"
+                    min="0"
+                    max="3600"
+                  />
+                  <span className="text-sm">seconds</span>
+                </div>
+              </div>
+            )}
             
             <div className="flex items-center justify-between">
               <span className="text-sm">Pause if GPU above</span>

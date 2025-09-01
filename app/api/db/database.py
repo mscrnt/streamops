@@ -155,6 +155,8 @@ async def create_tables() -> None:
             active_hours_json TEXT,
             preset_id TEXT,
             rule_yaml TEXT,
+            last_triggered TIMESTAMP,
+            last_error TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
