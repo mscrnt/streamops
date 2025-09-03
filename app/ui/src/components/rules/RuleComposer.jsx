@@ -147,15 +147,40 @@ export default function RuleComposer({ preset, rule, onSave, onCancel, saving })
   // Initialize rule data
   const [ruleData, setRuleData] = useState(() => {
     if (rule) {
-      // Editing existing rule
+      // Editing existing rule - parse the conditions and actions
+      let conditions = []
+      let actions = []
+      
+      // The API returns 'when' field for conditions directly on the rule object
+      if (rule.when && Array.isArray(rule.when)) {
+        conditions = rule.when.map(c => ({
+          field: c.field,
+          operator: c.op || c.operator,
+          value: c.value
+        }))
+      }
+      
+      // The API returns 'do' field for actions directly on the rule object
+      if (rule.do && Array.isArray(rule.do)) {
+        actions = rule.do.map(action => {
+          // Each action in API is like {"ffmpeg_remux": {...params}}
+          const actionType = Object.keys(action)[0]
+          const parameters = action[actionType] || {}
+          return {
+            type: actionType,
+            parameters: parameters
+          }
+        })
+      }
+      
       return {
         name: rule.name,
-        description: rule.description,
+        description: rule.description || '',
         priority: rule.priority || 100,
-        conditions: [], // Parse from rule.rule_json.when
+        conditions: conditions,
         condition_logic: 'all',
-        actions: [], // Parse from rule.rule_json.do
-        guardrails: rule.rule_json?.guardrails || {},
+        actions: actions,
+        guardrails: rule.guardrails || {},
         schedule: rule.schedule || '',
         quiet_period_sec: rule.quiet_period_sec || 45
       }

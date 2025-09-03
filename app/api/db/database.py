@@ -120,6 +120,7 @@ async def create_tables() -> None:
             state TEXT DEFAULT 'queued',
             progress REAL DEFAULT 0,
             error TEXT,
+            result_json TEXT,
             started_at TIMESTAMP,
             ended_at TIMESTAMP,
             -- New blocking fields for QP/AH/GR support

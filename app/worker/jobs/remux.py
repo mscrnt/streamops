@@ -73,18 +73,43 @@ class RemuxJob(BaseJob):
         
         output_size = os.path.getsize(output_path)
         
-        # Update progress
+        # Update progress and store result in database
         await self.update_progress(job_id, 100, "completed")
         
-        logger.info(f"Successfully remuxed to {output_path} ({output_size} bytes)")
-        
-        return {
+        # Store result in database for rule engine to retrieve
+        result = {
             "success": True,
             "output_path": output_path,
             "output_size": output_size,
             "output_format": output_format,
             "gpu_used": use_hardware
         }
+        
+        # Update job with result
+        try:
+            import aiosqlite
+            import json
+            from datetime import datetime
+            
+            conn = await aiosqlite.connect("/data/db/streamops.db")
+            await conn.execute("""
+                UPDATE so_jobs 
+                SET result_json = ?, state = 'completed', updated_at = ?
+                WHERE id = ?
+            """, (
+                json.dumps(result),
+                datetime.utcnow().isoformat(),
+                job_id
+            ))
+            await conn.commit()
+            await conn.close()
+            logger.info(f"Updated job {job_id} with result in database")
+        except Exception as e:
+            logger.error(f"Failed to update job result in database: {e}")
+        
+        logger.info(f"Successfully remuxed to {output_path} ({output_size} bytes)")
+        
+        return result
     
     async def check_gpu_available(self) -> bool:
         """Check if NVIDIA GPU is available"""

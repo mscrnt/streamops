@@ -105,6 +105,7 @@ export default function Rules() {
     onSuccess: () => {
       queryClient.invalidateQueries(['rules'])
       setEditingRule(null)
+      setShowComposer(false)
       toast.success('Rule updated successfully')
     }
   })
@@ -183,13 +184,42 @@ export default function Rules() {
         <RuleComposer
           preset={selectedPreset}
           rule={editingRule}
-          onSave={createMutation.mutate}
+          onSave={(ruleData) => {
+            if (editingRule) {
+              // Update existing rule - use same format as create
+              const apiData = {
+                name: ruleData.name,
+                description: ruleData.description,
+                enabled: editingRule.enabled !== false, // Keep existing enabled state
+                priority: ruleData.priority || 50,
+                trigger: editingRule.trigger || { type: 'file_closed' },
+                when: ruleData.conditions.map(c => ({
+                  field: c.field,
+                  op: c.operator,
+                  value: c.value
+                })),
+                quiet_period_sec: ruleData.quiet_period_sec || 45,
+                guardrails: ruleData.guardrails,
+                do: ruleData.actions.map(a => ({
+                  [a.type]: a.parameters || {}
+                }))
+              }
+              
+              updateMutation.mutate({
+                ruleId: editingRule.id,
+                updates: apiData
+              })
+            } else {
+              // Create new rule
+              createMutation.mutate(ruleData)
+            }
+          }}
           onCancel={() => {
             setShowComposer(false)
             setSelectedPreset(null)
             setEditingRule(null)
           }}
-          saving={createMutation.isPending}
+          saving={editingRule ? updateMutation.isPending : createMutation.isPending}
         />
       )}
       
