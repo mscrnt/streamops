@@ -1395,10 +1395,10 @@ async def get_asset_detail(
         # Get asset details
         cursor = await db.execute("""
             SELECT 
-                id, name, abs_path, size_bytes, status, 
+                id, abs_path, size, status, 
                 duration_sec, container, video_codec, audio_codec,
                 width, height, fps, created_at, updated_at, tags_json,
-                streams_json
+                streams_json, drive_hint, mtime, ctime, hash_xxh64, hash_sha256
             FROM so_assets
             WHERE id = ?
         """, (asset_id,))
@@ -1407,23 +1407,33 @@ async def get_asset_detail(
         if not row:
             raise HTTPException(status_code=404, detail="Asset not found")
         
+        # Extract filename from path
+        abs_path = row[1]
+        name = Path(abs_path).name if abs_path else "Unknown"
+        
         asset = {
             "id": row[0],
-            "name": row[1],
-            "abs_path": row[2],
-            "size": row[3],
-            "status": row[4],
-            "duration_sec": row[5],
-            "container": row[6],
-            "video_codec": row[7],
-            "audio_codec": row[8],
-            "width": row[9],
-            "height": row[10],
-            "fps": row[11],
-            "created_at": row[12],
-            "updated_at": row[13],
-            "tags": json.loads(row[14]) if row[14] else [],
-            "streams": json.loads(row[15]) if row[15] else []
+            "name": name,
+            "abs_path": abs_path,
+            "size": row[2],
+            "status": row[3],
+            "duration_sec": row[4],
+            "container": row[5],
+            "video_codec": row[6],
+            "audio_codec": row[7],
+            "width": row[8],
+            "height": row[9],
+            "fps": row[10],
+            "created_at": row[11],
+            "updated_at": row[12],
+            "tags": json.loads(row[13]) if row[13] else [],
+            "streams": json.loads(row[14]) if row[14] else [],
+            "drive_hint": row[15],
+            "mtime": row[16],
+            "ctime": row[17],
+            "hash_xxh64": row[18],
+            "hash_sha256": row[19],
+            "asset_type": "video" if row[6] else "unknown"
         }
         
         # Get thumbnails
@@ -1436,12 +1446,16 @@ async def get_asset_detail(
         # Get recent jobs for this asset
         cursor = await db.execute("""
             SELECT id, type, state, started_at, ended_at,
-                   json_extract(metadata, '$.duration_sec') as duration_sec
+                   CASE 
+                       WHEN ended_at IS NOT NULL AND started_at IS NOT NULL 
+                       THEN (julianday(ended_at) - julianday(started_at)) * 86400
+                       ELSE NULL 
+                   END as duration_sec
             FROM so_jobs
-            WHERE json_extract(metadata, '$.asset_id') = ?
+            WHERE asset_id = ? OR json_extract(payload_json, '$.asset_id') = ?
             ORDER BY created_at DESC
             LIMIT 10
-        """, (asset_id,))
+        """, (asset_id, asset_id))
         
         jobs = []
         async for job_row in cursor:
@@ -1844,6 +1858,165 @@ async def get_asset_timeline(
         raise
     except Exception as e:
         logger.error(f"Failed to get asset timeline: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{asset_id}/stream")
+async def stream_asset_video(
+    asset_id: str,
+    db=Depends(get_db)
+):
+    """Stream video file directly from current location."""
+    try:
+        from app.api.services.asset_events import AssetEventService
+        
+        # Get asset info
+        cursor = await db.execute(
+            "SELECT * FROM so_assets WHERE id = ?", 
+            (asset_id,)
+        )
+        asset = await cursor.fetchone()
+        
+        if not asset:
+            raise HTTPException(status_code=404, detail="Asset not found")
+        
+        # Convert to dict
+        columns = [col[0] for col in cursor.description]
+        asset_dict = dict(zip(columns, asset))
+        
+        # Get current file path from timeline
+        timeline = await AssetEventService.get_asset_timeline(asset_id)
+        original_path = asset_dict.get('abs_path') or asset_dict.get('filepath')
+        proxy_path = None
+        current_path = original_path
+        
+        # Check timeline for proxy and move events
+        for event in reversed(timeline):
+            if event['event_type'] == 'proxy_completed' and event.get('payload', {}).get('output_path'):
+                proxy_path = event['payload']['output_path']
+            elif event['event_type'] == 'move_completed' and event.get('payload', {}).get('to'):
+                # Update the original path if it was moved
+                if not proxy_path or event['payload'].get('from') != proxy_path:
+                    current_path = event['payload']['to']
+        
+        # Try proxy first, then fall back to original
+        file_path = None
+        used_proxy = False
+        
+        if proxy_path:
+            proxy_file = Path(proxy_path)
+            if proxy_file.exists():
+                file_path = proxy_file
+                used_proxy = True
+                logger.info(f"Using proxy file for streaming: {proxy_path}")
+        
+        if not file_path:
+            if not current_path:
+                raise HTTPException(status_code=404, detail="File path not found")
+            
+            file_path = Path(current_path)
+            if not file_path.exists():
+                logger.warning(f"File not found at {file_path}, asset may have moved")
+                raise HTTPException(status_code=404, detail=f"File not found at {current_path}")
+        
+        # Determine content type based on file extension
+        ext = file_path.suffix.lower()
+        content_types = {
+            '.mp4': 'video/mp4',
+            '.webm': 'video/webm',
+            '.ogg': 'video/ogg',
+            '.mov': 'video/quicktime',
+            '.avi': 'video/x-msvideo',
+            '.mkv': 'video/x-matroska',
+            '.flv': 'video/x-flv'
+        }
+        content_type = content_types.get(ext, 'video/mp4')
+        
+        # Stream the file
+        def iterfile():
+            with open(file_path, 'rb') as f:
+                while chunk := f.read(1024 * 1024):  # 1MB chunks
+                    yield chunk
+        
+        return StreamingResponse(
+            iterfile(),
+            media_type=content_type,
+            headers={
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(file_path.stat().st_size)
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to stream asset: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{asset_id}/stream-info")
+async def get_stream_info(
+    asset_id: str,
+    db=Depends(get_db)
+):
+    """Check if video can be streamed and get info."""
+    try:
+        from app.api.services.asset_events import AssetEventService
+        
+        # Get asset info
+        cursor = await db.execute(
+            "SELECT * FROM so_assets WHERE id = ?", 
+            (asset_id,)
+        )
+        asset = await cursor.fetchone()
+        
+        if not asset:
+            raise HTTPException(status_code=404, detail="Asset not found")
+        
+        # Convert to dict
+        columns = [col[0] for col in cursor.description]
+        asset_dict = dict(zip(columns, asset))
+        
+        # Get current file path from timeline
+        timeline = await AssetEventService.get_asset_timeline(asset_id)
+        original_path = asset_dict.get('abs_path') or asset_dict.get('filepath')
+        proxy_path = None
+        current_path = original_path
+        
+        # Check timeline for proxy and move events
+        for event in reversed(timeline):
+            if event['event_type'] == 'proxy_completed' and event.get('payload', {}).get('output_path'):
+                proxy_path = event['payload']['output_path']
+            elif event['event_type'] == 'move_completed' and event.get('payload', {}).get('to'):
+                # Update the original path if it was moved
+                if not proxy_path or event['payload'].get('from') != proxy_path:
+                    current_path = event['payload']['to']
+        
+        # Check if proxy exists
+        has_proxy = False
+        file_to_use = None
+        
+        if proxy_path and Path(proxy_path).exists():
+            has_proxy = True
+            file_to_use = Path(proxy_path)
+        elif current_path and Path(current_path).exists():
+            file_to_use = Path(current_path)
+        else:
+            raise HTTPException(status_code=404, detail="File not found")
+        
+        return {
+            "can_stream": True,
+            "path": str(file_to_use),
+            "size": file_to_use.stat().st_size,
+            "content_type": "video/mp4",
+            "has_proxy": has_proxy,
+            "using_proxy": has_proxy
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get stream info: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

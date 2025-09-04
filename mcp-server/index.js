@@ -90,6 +90,28 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: 'streamops_get_asset_detail',
+      description: 'Get detailed asset information including thumbnails and recent jobs',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          asset_id: { type: 'string', description: 'Asset ID' },
+        },
+        required: ['asset_id'],
+      },
+    },
+    {
+      name: 'streamops_get_asset_timeline',
+      description: 'Get asset with its event timeline',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          asset_id: { type: 'string', description: 'Asset ID' },
+        },
+        required: ['asset_id'],
+      },
+    },
+    {
       name: 'streamops_list_recent_recordings',
       description: 'List recent recordings (convenience method)',
       inputSchema: {
@@ -280,6 +302,30 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'streamops_get_asset': {
         const response = await api.get(`/assets/${args.asset_id}`);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(response.data, null, 2),
+            },
+          ],
+        };
+      }
+      
+      case 'streamops_get_asset_detail': {
+        const response = await api.get(`/assets/${args.asset_id}/detail`);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(response.data, null, 2),
+            },
+          ],
+        };
+      }
+      
+      case 'streamops_get_asset_timeline': {
+        const response = await api.get(`/assets/${args.asset_id}/timeline`);
         return {
           content: [
             {

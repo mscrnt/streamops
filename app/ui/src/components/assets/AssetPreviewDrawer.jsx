@@ -3,7 +3,8 @@ import { useQuery } from '@tanstack/react-query'
 import { 
   X, Download, Archive, Trash2, Copy, Move, Play, 
   RefreshCw, Tag, Clock, HardDrive, Film, Volume2,
-  FileText, Loader2, CheckCircle, AlertCircle, ExternalLink
+  FileText, Loader2, CheckCircle, AlertCircle, ExternalLink,
+  FileVideo, Package
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import Button from '@/components/ui/Button'
@@ -12,6 +13,7 @@ import { useApi } from '@/hooks/useApi'
 import { formatBytes, formatDuration, formatRelativeTime } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import toast from 'react-hot-toast'
+import { formatDistanceToNow } from 'date-fns'
 
 export default function AssetPreviewDrawer({ assetId, onClose, onAction }) {
   const { api } = useApi()
@@ -24,6 +26,17 @@ export default function AssetPreviewDrawer({ assetId, onClose, onAction }) {
     queryFn: async () => {
       const response = await api.get(`/assets/${assetId}/detail`)
       return response.data
+    },
+    enabled: !!assetId
+  })
+  
+  // Fetch timeline to get current file location
+  const { data: timelineData } = useQuery({
+    queryKey: ['asset-timeline', assetId],
+    queryFn: async () => {
+      const res = await fetch(`/api/assets/${assetId}/timeline`)
+      if (!res.ok) throw new Error('Failed to fetch timeline')
+      return res.json()
     },
     enabled: !!assetId
   })
@@ -41,11 +54,50 @@ export default function AssetPreviewDrawer({ assetId, onClose, onAction }) {
   const asset = assetData?.asset
   const thumbs = assetData?.thumbs
   const recentJobs = assetData?.jobs_recent || []
+  const timeline = timelineData?.timeline || []
+  
+  // Get current file path from timeline (checking remux and move events)
+  const getCurrentPath = () => {
+    let path = asset?.abs_path || asset?.filepath
+    
+    if (timeline.length > 0) {
+      // Process events chronologically to track file path changes
+      // This ensures we follow the actual sequence: original -> remux -> move
+      for (const event of timeline) {
+        if (event.event_type === 'remux_completed' && event.payload?.to) {
+          // Remux creates a new file at a new location
+          path = event.payload.to
+        } else if (event.event_type === 'move_completed' && event.payload?.to) {
+          // Move changes the location of the current file
+          path = event.payload.to
+        }
+      }
+    }
+    
+    return path
+  }
+  
+  const currentPath = getCurrentPath()
+  const currentFilename = currentPath ? currentPath.split('/').pop() : (asset?.name || 'Unknown')
+  
+  // Determine current container format based on file extension
+  const getCurrentContainer = () => {
+    if (!currentPath) return asset?.container
+    const ext = currentPath.split('.').pop()?.toLowerCase()
+    const containerMap = {
+      'mp4': 'MP4',
+      'mov': 'MOV',
+      'mkv': 'MATROSKA',
+      'webm': 'WEBM',
+      'avi': 'AVI',
+      'flv': 'FLV'
+    }
+    return containerMap[ext] || asset?.container
+  }
   
   const handleCopyPath = () => {
-    const pathToCopy = pathData?.host_hint || pathData?.container_path || asset?.abs_path
-    if (pathToCopy) {
-      navigator.clipboard.writeText(pathToCopy)
+    if (currentPath) {
+      navigator.clipboard.writeText(currentPath)
       setCopiedPath(true)
       toast.success('Path copied to clipboard')
       setTimeout(() => setCopiedPath(false), 2000)
@@ -90,13 +142,21 @@ export default function AssetPreviewDrawer({ assetId, onClose, onAction }) {
         {/* Header */}
         <div className="border-b border-border p-4">
           <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold truncate">
-              {asset?.name || 'Asset Preview'}
-            </h2>
+            <div className="flex-1 min-w-0">
+              <h2 className="text-lg font-semibold truncate">
+                {currentFilename}
+              </h2>
+              {currentPath && currentPath !== asset?.abs_path && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  Updated location after {timeline.some(e => e.event_type === 'remux_completed') ? 'remux/move' : 'move'}
+                </p>
+              )}
+            </div>
             <Button
               variant="ghost"
               size="icon"
               onClick={onClose}
+              className="ml-2"
             >
               <X className="w-4 h-4" />
             </Button>
@@ -128,38 +188,37 @@ export default function AssetPreviewDrawer({ assetId, onClose, onAction }) {
           ) : asset ? (
             <>
               {/* Preview */}
-              <div className="aspect-video bg-muted relative">
-                {thumbs?.poster ? (
-                  <img 
-                    src={thumbs.poster} 
-                    alt={asset.name}
-                    className="w-full h-full object-contain"
-                    onError={(e) => {
-                      e.target.style.display = 'none'
-                    }}
-                  />
+              <div className="aspect-video bg-muted relative group">
+                {asset.video_codec ? (
+                  <>
+                    {/* Use native video element with controls */}
+                    <video
+                      className="w-full h-full object-contain"
+                      src={`/api/assets/${assetId}/stream`}
+                      controls
+                      preload="metadata"
+                      onLoadedMetadata={(e) => {
+                        // Seek to 10% of the video for a representative frame
+                        if (!e.target.hasAttribute('data-playing')) {
+                          e.target.currentTime = Math.min(5, e.target.duration * 0.1 || 0)
+                        }
+                      }}
+                      onPlay={(e) => {
+                        e.target.setAttribute('data-playing', 'true')
+                      }}
+                      onPause={(e) => {
+                        e.target.removeAttribute('data-playing')
+                      }}
+                    />
+                  </>
                 ) : (
                   <div className="absolute inset-0 flex items-center justify-center">
-                    {asset.video_codec ? (
-                      <Film className="w-12 h-12 text-muted-foreground" />
-                    ) : asset.audio_codec ? (
+                    {asset.audio_codec ? (
                       <Volume2 className="w-12 h-12 text-muted-foreground" />
                     ) : (
                       <FileText className="w-12 h-12 text-muted-foreground" />
                     )}
                   </div>
-                )}
-                
-                {/* Hover preview */}
-                {thumbs?.hover_mp4 && (
-                  <video
-                    className="absolute inset-0 w-full h-full object-contain opacity-0 hover:opacity-100 transition-opacity"
-                    src={thumbs.hover_mp4}
-                    muted
-                    loop
-                    onMouseEnter={(e) => e.target.play()}
-                    onMouseLeave={(e) => e.target.pause()}
-                  />
                 )}
               </div>
               
@@ -187,7 +246,7 @@ export default function AssetPreviewDrawer({ assetId, onClose, onAction }) {
                     size="sm"
                     onClick={() => handleAction('proxy')}
                   >
-                    <Play className="w-4 h-4 mr-2" />
+                    <Film className="w-4 h-4 mr-2" />
                     Proxy
                   </Button>
                 </div>
@@ -279,7 +338,7 @@ export default function AssetPreviewDrawer({ assetId, onClose, onAction }) {
                         )}
                         <div className="flex justify-between text-sm">
                           <span className="text-muted-foreground">Container</span>
-                          <span className="font-medium">{asset.container?.toUpperCase()}</span>
+                          <span className="font-medium">{getCurrentContainer()}</span>
                         </div>
                         {asset.width && asset.height && (
                           <div className="flex justify-between text-sm">
@@ -310,10 +369,10 @@ export default function AssetPreviewDrawer({ assetId, onClose, onAction }) {
                     
                     {/* Path */}
                     <div>
-                      <h3 className="text-sm font-medium mb-2">Location</h3>
+                      <h3 className="text-sm font-medium mb-2">Current Location</h3>
                       <div className="space-y-2">
                         <div className="p-2 bg-muted rounded text-xs font-mono break-all">
-                          {pathData?.host_hint || pathData?.container_path || asset.abs_path}
+                          {currentPath}
                         </div>
                         <div className="flex gap-2">
                           <Button

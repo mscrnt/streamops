@@ -16,7 +16,9 @@ import { cn } from '@/lib/utils'
 import toast from 'react-hot-toast'
 import AssetPreviewDrawer from '@/components/assets/AssetPreviewDrawer'
 import AssetActionModal from '@/components/assets/AssetActionModal'
+import VideoPlayerModal from '@/components/assets/VideoPlayerModal'
 import BulkActionBar from '@/components/assets/BulkActionBar'
+import AssetRow from '@/components/assets/AssetRow'
 
 export default function Assets() {
   const navigate = useNavigate()
@@ -38,6 +40,7 @@ export default function Assets() {
   const [selectedAssets, setSelectedAssets] = useState(new Set())
   const [previewAssetId, setPreviewAssetId] = useState(null)
   const [actionModal, setActionModal] = useState(null)
+  const [videoPlayerAssetId, setVideoPlayerAssetId] = useState(null)
   const [showSearch, setShowSearch] = useState(!!search)
   const [showFilters, setShowFilters] = useState(false)
   const [localSearch, setLocalSearch] = useState(search)
@@ -177,6 +180,8 @@ export default function Assets() {
   const handleAssetAction = useCallback((assetId, action) => {
     if (action === 'preview') {
       setPreviewAssetId(assetId)
+    } else if (action === 'play') {
+      setVideoPlayerAssetId(assetId)
     } else if (action === 'download') {
       window.open(`/api/assets/${assetId}/download`, '_blank')
     } else {
@@ -481,134 +486,19 @@ export default function Assets() {
             </CardContent>
           </Card>
         ) : view === 'list' ? (
-          // List view
+          // List view with timeline
           <div className="space-y-2">
             {assets.map((asset) => (
-              <div
+              <AssetRow
                 key={asset.id}
-                className={cn(
-                  "flex items-center gap-4 p-3 rounded-lg border border-border hover:bg-accent/50 transition-colors",
-                  selectedAssets.has(asset.id) && "bg-accent"
-                )}
-              >
-                <button
-                  onClick={() => toggleAssetSelection(asset.id)}
-                  className="flex-shrink-0"
-                >
-                  {selectedAssets.has(asset.id) ? (
-                    <CheckSquare className="w-5 h-5 text-primary" />
-                  ) : (
-                    <Square className="w-5 h-5 text-muted-foreground" />
-                  )}
-                </button>
-                
-                <div className="flex-shrink-0">
-                  {getAssetIcon(asset)}
-                </div>
-                
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => handleAssetAction(asset.id, 'preview')}
-                      className="font-medium truncate hover:text-primary transition-colors"
-                    >
-                      {asset.filename || asset.name || 'Untitled'}
-                    </button>
-                    {asset.tags?.map(tag => (
-                      <Badge key={tag} variant="outline" className="text-xs">
-                        {tag}
-                      </Badge>
-                    ))}
-                  </div>
-                  <div className="flex items-center gap-4 mt-1 text-sm text-muted-foreground">
-                    <span>{formatBytes(asset.metadata?.size_bytes || 0)}</span>
-                    {asset.metadata?.duration && (
-                      <span>{formatDuration(asset.metadata.duration)}</span>
-                    )}
-                    {asset.metadata?.width && asset.metadata?.height && (
-                      <span>{asset.metadata.width}×{asset.metadata.height}</span>
-                    )}
-                    <span>{formatRelativeTime(asset.updated_at)}</span>
-                  </div>
-                </div>
-                
-                <div className="flex-shrink-0">
-                  {getStatusBadge(asset.status)}
-                </div>
-                
-                <div className="flex-shrink-0 relative">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      setActiveMenuId(activeMenuId === asset.id ? null : asset.id)
-                    }}
-                  >
-                    <MoreVertical className="w-4 h-4" />
-                  </Button>
-                  {activeMenuId === asset.id && (
-                    <div className="absolute right-0 top-10 z-20 w-48 bg-popover border border-border rounded-lg shadow-lg py-1">
-                      <button
-                        className="w-full px-3 py-2 text-sm text-left hover:bg-accent hover:text-accent-foreground"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          handleAssetAction(asset.id, 'preview')
-                          setActiveMenuId(null)
-                        }}
-                      >
-                        <Eye className="w-4 h-4 inline mr-2" />
-                        Preview
-                      </button>
-                      <button
-                        className="w-full px-3 py-2 text-sm text-left hover:bg-accent hover:text-accent-foreground"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          setActionModal({ action: 'remux', assetId: asset.id })
-                          setActiveMenuId(null)
-                        }}
-                      >
-                        <RefreshCw className="w-4 h-4 inline mr-2" />
-                        Remux
-                      </button>
-                      <button
-                        className="w-full px-3 py-2 text-sm text-left hover:bg-accent hover:text-accent-foreground"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          setActionModal({ action: 'proxy', assetId: asset.id })
-                          setActiveMenuId(null)
-                        }}
-                      >
-                        <Play className="w-4 h-4 inline mr-2" />
-                        Create Proxy
-                      </button>
-                      <button
-                        className="w-full px-3 py-2 text-sm text-left hover:bg-accent hover:text-accent-foreground"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          setActionModal({ action: 'move', assetId: asset.id })
-                          setActiveMenuId(null)
-                        }}
-                      >
-                        <Move className="w-4 h-4 inline mr-2" />
-                        Move
-                      </button>
-                      <div className="h-px bg-border my-1" />
-                      <button
-                        className="w-full px-3 py-2 text-sm text-left hover:bg-accent hover:text-accent-foreground text-destructive"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          setActionModal({ action: 'delete', assetId: asset.id })
-                          setActiveMenuId(null)
-                        }}
-                      >
-                        <Trash2 className="w-4 h-4 inline mr-2" />
-                        Delete
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </div>
+                asset={asset}
+                selected={selectedAssets.has(asset.id)}
+                onToggleSelect={toggleAssetSelection}
+                onPreview={(id) => handleAssetAction(id, 'preview')}
+                onAction={handleAssetAction}
+                showMenu={activeMenuId === asset.id}
+                onToggleMenu={setActiveMenuId}
+              />
             ))}
           </div>
         ) : (
@@ -730,6 +620,14 @@ export default function Assets() {
           assetId={previewAssetId}
           onClose={() => setPreviewAssetId(null)}
           onAction={handleAssetAction}
+        />
+      )}
+      
+      {/* Video player modal */}
+      {videoPlayerAssetId && (
+        <VideoPlayerModal
+          assetId={videoPlayerAssetId}
+          onClose={() => setVideoPlayerAssetId(null)}
         />
       )}
       
