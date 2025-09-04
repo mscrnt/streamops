@@ -61,7 +61,7 @@ async def create_tables() -> None:
             "so_assets_fts",  # Drop FTS table first
             "so_thumbs", "so_jobs", "so_sessions", "so_rules",
             "so_overlays", "so_configs", "so_reports", "so_obs_connections",
-            "so_roles", "so_drives", "so_assets"
+            "so_roles", "so_drives", "so_asset_events", "so_assets"
         ]
         for table in tables:
             try:
@@ -134,6 +134,24 @@ async def create_tables() -> None:
             FOREIGN KEY (asset_id) REFERENCES so_assets(id)
         )
     """)
+    
+    # Asset Events table (event sourcing for asset history)
+    await _db.execute("""
+        CREATE TABLE IF NOT EXISTS so_asset_events (
+            id TEXT PRIMARY KEY,
+            asset_id TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            job_id TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (asset_id) REFERENCES so_assets(id),
+            FOREIGN KEY (job_id) REFERENCES so_jobs(id)
+        )
+    """)
+    
+    # Create indices for asset events
+    await _db.execute("CREATE INDEX IF NOT EXISTS idx_asset_events_asset_time ON so_asset_events(asset_id, created_at)")
+    await _db.execute("CREATE INDEX IF NOT EXISTS idx_asset_events_type ON so_asset_events(event_type)")
     
     # Rules table with QP/AH support
     await _db.execute("""

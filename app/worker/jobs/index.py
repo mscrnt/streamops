@@ -152,6 +152,24 @@ class IndexJob:
         
         await db.commit()
         
+        # Emit asset event for recording
+        if action == "created":
+            try:
+                from app.api.services.asset_events import AssetEventService
+                await AssetEventService.emit_recorded_event(
+                    asset_id,
+                    file_path,
+                    {
+                        "duration_sec": media_info.get("duration"),
+                        "size": file_size,
+                        "container": media_info.get("container"),
+                        "video_codec": media_info.get("video_codec"),
+                        "audio_codec": media_info.get("audio_codec")
+                    }
+                )
+            except Exception as e:
+                logger.debug(f"Could not emit recorded event: {e}")
+        
         # Notify about new asset via SSE
         if action == "created":
             try:

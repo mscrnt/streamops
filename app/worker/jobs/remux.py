@@ -109,6 +109,24 @@ class RemuxJob(BaseJob):
         
         logger.info(f"Successfully remuxed to {output_path} ({output_size} bytes)")
         
+        # Emit remux completed event
+        try:
+            # Get asset_id from database
+            conn = await aiosqlite.connect("/data/db/streamops.db")
+            cursor = await conn.execute(
+                "SELECT asset_id FROM so_jobs WHERE id = ?",
+                (job_id,)
+            )
+            row = await cursor.fetchone()
+            if row and row[0]:
+                from app.api.services.asset_events import AssetEventService
+                await AssetEventService.emit_remux_completed(
+                    row[0], job_id, input_path, output_path, output_size
+                )
+            await conn.close()
+        except Exception as e:
+            logger.debug(f"Could not emit remux event: {e}")
+        
         return result
     
     async def check_gpu_available(self) -> bool:

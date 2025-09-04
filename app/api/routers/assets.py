@@ -561,6 +561,54 @@ async def get_recent_assets(
     except Exception as e:
         logger.error(f"Failed to get recent assets: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to get recent assets: {str(e)}")
+
+
+@router.get("/recent-timeline")
+async def get_recent_assets_with_timeline(
+    hours: int = Query(default=24, description="Hours to look back"),
+    limit: int = Query(default=10, ge=1, le=100),
+    db=Depends(get_db)
+):
+    """Get recently recorded assets with their event timelines."""
+    try:
+        from app.api.services.asset_events import AssetEventService
+        
+        # Calculate cutoff time
+        cutoff = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
+        
+        # Get recent assets
+        cursor = await db.execute("""
+            SELECT * FROM so_assets
+            WHERE created_at >= ?
+            ORDER BY created_at DESC
+            LIMIT ?
+        """, (cutoff, limit))
+        
+        assets = []
+        rows = await cursor.fetchall()
+        columns = [col[0] for col in cursor.description]
+        
+        for row in rows:
+            asset_dict = dict(zip(columns, row))
+            
+            # Get timeline for each asset
+            timeline = await AssetEventService.get_asset_timeline(asset_dict["id"])
+            
+            assets.append({
+                "asset": asset_dict,
+                "timeline": timeline
+            })
+        
+        return {
+            "assets": assets,
+            "count": len(assets)
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to get recent assets with timeline: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/{asset_id}", response_model=AssetResponse)
 async def get_asset(asset_id: str, db=Depends(get_db)) -> AssetResponse:
     """Get a specific asset by ID"""
@@ -1759,5 +1807,45 @@ async def get_asset_hover_video(
         return FileResponse(hover_path, media_type="video/mp4")
     else:
         return Response(content=b"", media_type="video/mp4", status_code=404)
+
+
+@router.get("/{asset_id}/timeline")
+async def get_asset_timeline(
+    asset_id: str,
+    db=Depends(get_db)
+):
+    """Get timeline of events for an asset."""
+    try:
+        from app.api.services.asset_events import AssetEventService
+        
+        # Get asset info
+        cursor = await db.execute(
+            "SELECT * FROM so_assets WHERE id = ?", 
+            (asset_id,)
+        )
+        asset = await cursor.fetchone()
+        
+        if not asset:
+            raise HTTPException(status_code=404, detail="Asset not found")
+        
+        # Get timeline events
+        timeline = await AssetEventService.get_asset_timeline(asset_id)
+        
+        # Convert asset row to dict
+        columns = [col[0] for col in cursor.description]
+        asset_dict = dict(zip(columns, asset))
+        
+        return {
+            "asset": asset_dict,
+            "timeline": timeline
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get asset timeline: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 
 

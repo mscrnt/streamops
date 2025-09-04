@@ -821,3 +821,5 @@ async def get_active_jobs(
     except Exception as e:
         logger.error(f"Failed to get active jobs: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+

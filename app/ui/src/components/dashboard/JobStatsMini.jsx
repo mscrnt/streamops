@@ -1,9 +1,22 @@
-import { useMemo } from 'react'
+import { useMemo, useEffect } from 'react'
 import { useJobStats } from '@/hooks/useJobStats'
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts'
+import { useQuery } from '@tanstack/react-query'
+import { Play } from 'lucide-react'
 
 export default function JobStatsMini() {
   const { data: stats, isLoading } = useJobStats({ window: '24h' })
+  
+  // Fetch jobs summary for running counter
+  const { data: summary } = useQuery({
+    queryKey: ['jobs', 'summary'],
+    queryFn: async () => {
+      const res = await fetch('/api/jobs/summary?hours=24')
+      if (!res.ok) throw new Error('Failed to fetch jobs summary')
+      return res.json()
+    },
+    refetchInterval: 5000 // Refresh every 5 seconds
+  })
   
   const chartData = useMemo(() => {
     if (!stats) return []
@@ -70,8 +83,14 @@ export default function JobStatsMini() {
                   />
                 </PieChart>
               </ResponsiveContainer>
-              <div className="absolute inset-0 flex items-center justify-center">
+              <div className="absolute inset-0 flex flex-col items-center justify-center">
                 <span className="text-sm font-semibold">{successRate}%</span>
+                {summary?.running > 0 && (
+                  <div className="flex items-center gap-1 mt-1">
+                    <Play className="w-2 h-2 fill-current text-blue-500" />
+                    <span className="text-xs text-blue-500 font-medium">{summary.running}</span>
+                  </div>
+                )}
               </div>
             </div>
             
@@ -100,6 +119,12 @@ export default function JobStatsMini() {
               <span className="text-xs text-muted-foreground">Avg Duration</span>
               <span className="text-xs font-medium">{avgDuration}</span>
             </div>
+            {summary?.running > 0 && (
+              <div className="flex items-center justify-between mt-1">
+                <span className="text-xs text-muted-foreground">Running</span>
+                <span className="text-xs font-medium text-blue-500">{summary.running}</span>
+              </div>
+            )}
             {stats?.queued !== undefined && stats.queued > 0 && (
               <div className="flex items-center justify-between mt-1">
                 <span className="text-xs text-muted-foreground">Queued</span>

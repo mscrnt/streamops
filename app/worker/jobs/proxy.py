@@ -313,6 +313,33 @@ class ProxyJob(BaseJob):
         
         logger.info(f"Successfully created proxy: {output_path} ({output_size} bytes)")
         
+        # Emit proxy completed event
+        try:
+            # Get asset_id from job data or database
+            asset_id = None
+            if 'asset_id' in data:
+                asset_id = data['asset_id']
+            else:
+                # Try to get from database
+                import aiosqlite
+                conn = await aiosqlite.connect("/data/db/streamops.db")
+                cursor = await conn.execute(
+                    "SELECT asset_id FROM so_jobs WHERE id = ?",
+                    (job_id,)
+                )
+                row = await cursor.fetchone()
+                if row and row[0]:
+                    asset_id = row[0]
+                await conn.close()
+            
+            if asset_id:
+                from app.api.services.asset_events import AssetEventService
+                await AssetEventService.emit_proxy_completed(
+                    asset_id, job_id, output_path, profile, f"{target_height}p", output_size
+                )
+        except Exception as e:
+            logger.debug(f"Could not emit proxy event: {e}")
+        
         # Determine output codec info for response
         if profile.startswith("h264"):
             video_codec_name = "H.264"

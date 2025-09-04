@@ -412,6 +412,17 @@ class RulesEngine:
             moved = Artifact(path=target_path, ext=target_path.suffix, mime=ctx.active.mime)
             ctx.update_active(moved)
             
+            # Emit move event if we have an asset_id
+            asset_id = ctx.vars.get("asset_id")
+            if asset_id:
+                try:
+                    from app.api.services.asset_events import AssetEventService
+                    await AssetEventService.emit_move_completed(
+                        asset_id, str(source), str(target_path)
+                    )
+                except Exception as e:
+                    logger.debug(f"Could not emit move event: {e}")
+            
             logger.info(f"Moved: {source} → {target_path}")
             return ActionResult(primary_output_path=target_path)
             
