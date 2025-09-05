@@ -377,40 +377,40 @@ const SystemSettings = () => {
           <CardContent>
           
           {systemInfo?.gpu?.present ? (
-            <div className="space-y-3">
-              <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-6">
                 <div>
-                  <span className="text-sm text-muted-foreground">Vendor</span>
-                  <p className="text-sm font-medium capitalize">
+                  <span className="text-sm text-muted-foreground block mb-1">Vendor</span>
+                  <p className="text-base font-semibold capitalize text-foreground">
                     {systemInfo.gpu.vendor || 'Unknown'}
                   </p>
                 </div>
                 <div>
-                  <span className="text-sm text-muted-foreground">Driver</span>
-                  <p className="text-sm font-medium">
+                  <span className="text-sm text-muted-foreground block mb-1">Driver</span>
+                  <p className="text-base font-semibold text-foreground">
                     {systemInfo.gpu.driver || 'N/A'}
                   </p>
                 </div>
                 {systemInfo.gpu.vendor === 'nvidia' && systemInfo.gpu.cuda?.enabled && (
                   <div>
-                    <span className="text-sm text-muted-foreground">CUDA</span>
-                    <p className="text-sm font-medium">
+                    <span className="text-sm text-muted-foreground block mb-1">CUDA Version</span>
+                    <p className="text-base font-semibold text-foreground">
                       v{systemInfo.gpu.cuda.version}
                     </p>
                   </div>
                 )}
                 {systemInfo.gpu.vendor === 'amd' && systemInfo.gpu.rocm?.enabled && (
                   <div>
-                    <span className="text-sm text-gray-600 dark:text-gray-400">ROCm</span>
-                    <p className="text-sm font-medium text-gray-900 dark:text-white">
+                    <span className="text-sm text-muted-foreground block mb-1">ROCm Version</span>
+                    <p className="text-base font-semibold text-foreground">
                       v{systemInfo.gpu.rocm.version}
                     </p>
                   </div>
                 )}
                 {systemInfo.gpu.vendor === 'intel' && systemInfo.gpu.level_zero?.enabled && (
                   <div>
-                    <span className="text-sm text-gray-600 dark:text-gray-400">Level Zero</span>
-                    <p className="text-sm font-medium text-gray-900 dark:text-white">
+                    <span className="text-sm text-muted-foreground block mb-1">Level Zero</span>
+                    <p className="text-base font-semibold text-foreground">
                       Enabled
                     </p>
                   </div>
@@ -418,22 +418,22 @@ const SystemSettings = () => {
               </div>
               
               {systemInfo.gpu.gpus?.map((gpu, idx) => (
-                <div key={idx} className="p-3 bg-muted rounded">
-                  <div className="font-medium">{gpu.name}</div>
+                <div key={idx} className="p-4 bg-card border border-border rounded-lg">
+                  <div className="font-semibold text-foreground text-base mb-1">{gpu.name}</div>
                   <div className="text-sm text-muted-foreground">
-                    VRAM: {formatBytes(gpu.memory_total_bytes)}
+                    <span className="font-medium">VRAM:</span> {formatBytes(gpu.memory_total_bytes)}
                   </div>
                 </div>
               ))}
               
               {systemInfo.gpu.ffmpeg_encoders?.length > 0 && (
                 <div>
-                  <span className="text-sm text-gray-600 dark:text-gray-400">Hardware Encoders</span>
-                  <div className="flex flex-wrap gap-2 mt-1">
+                  <span className="text-sm text-muted-foreground font-medium">Hardware Encoders</span>
+                  <div className="flex flex-wrap gap-2 mt-2">
                     {systemInfo.gpu.ffmpeg_encoders.map(enc => (
-                      <span key={enc} className="px-2 py-1 bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300 text-xs rounded">
+                      <Badge key={enc} variant="success" className="text-sm">
                         {enc}
-                      </span>
+                      </Badge>
                     ))}
                   </div>
                 </div>
@@ -441,19 +441,19 @@ const SystemSettings = () => {
               
               {systemInfo.gpu.ffmpeg_hwaccels?.length > 0 && (
                 <div>
-                  <span className="text-sm text-gray-600 dark:text-gray-400">Hardware Acceleration</span>
-                  <div className="flex flex-wrap gap-2 mt-1">
+                  <span className="text-sm text-muted-foreground font-medium">Hardware Acceleration</span>
+                  <div className="flex flex-wrap gap-2 mt-2">
                     {systemInfo.gpu.ffmpeg_hwaccels.map(accel => (
-                      <span key={accel} className="px-2 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-300 text-xs rounded">
+                      <Badge key={accel} variant="default" className="text-sm">
                         {accel}
-                      </span>
+                      </Badge>
                     ))}
                   </div>
                 </div>
               )}
               
-              <div className="mt-3 p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded">
-                <p className="text-sm text-green-800 dark:text-green-200">
+              <div className="mt-4 p-3 bg-primary/5 border border-primary/20 rounded-lg">
+                <p className="text-sm font-medium text-foreground">
                   {systemInfo.gpu.vendor === 'nvidia' && systemInfo.gpu.cuda?.enabled && (
                     <>CUDA enabled (v{systemInfo.gpu.cuda.version}); </>
                   )}

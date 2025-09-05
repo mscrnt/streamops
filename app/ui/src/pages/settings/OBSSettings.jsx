@@ -243,6 +243,7 @@ const OBSSettings = () => {
                         size="sm"
                         onClick={() => handleTestConnection(connection.id)}
                         disabled={testingConnection === connection.id}
+                        title="Test Connection"
                       >
                         {testingConnection === connection.id ? (
                           <Loader2 className="h-4 w-4 animate-spin" />
@@ -254,6 +255,7 @@ const OBSSettings = () => {
                         variant="ghost"
                         size="sm"
                         onClick={() => handleToggleConnection(connection.id, connection.connected)}
+                        title={connection.connected ? "Disconnect from OBS" : "Connect to OBS"}
                       >
                         {connection.connected ? (
                           <PowerOff className="h-4 w-4" />
@@ -265,6 +267,7 @@ const OBSSettings = () => {
                         variant="ghost"
                         size="sm"
                         onClick={() => setEditingConnection(connection)}
+                        title="Edit Connection Settings"
                       >
                         <Edit2 className="h-4 w-4" />
                       </Button>
@@ -273,6 +276,7 @@ const OBSSettings = () => {
                         size="sm"
                         onClick={() => handleDeleteConnection(connection.id, connection.name)}
                         className="text-destructive hover:text-destructive"
+                        title="Delete Connection"
                       >
                         <Trash2 className="h-4 w-4" />
                       </Button>
