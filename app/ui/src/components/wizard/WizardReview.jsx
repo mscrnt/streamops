@@ -3,8 +3,6 @@ import {
   AlertCircle,
   HardDrive,
   Video,
-  Wand2,
-  Layers,
   Rocket,
   Settings
 } from 'lucide-react'
@@ -13,12 +11,11 @@ import Button from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
 
 export default function WizardReview({ allData, onApply, applyMutation }) {
-  const { drives, obs, rules, overlays } = allData
+  const { drives, obs } = allData
   
   // Check for required roles - drives come as an array of role assignments
   const hasRecordingDrive = drives?.some(d => d.role === 'recording')
   const hasEditingDrive = drives?.some(d => d.role === 'editing')
-  const enabledRules = rules?.filter(r => r.enabled) || []
   
   const isReady = hasRecordingDrive && hasEditingDrive
   
@@ -48,7 +45,7 @@ export default function WizardReview({ allData, onApply, applyMutation }) {
       </Card>
       
       {/* Configuration Details */}
-      <div className="grid gap-4 md:grid-cols-2">
+      <div className="grid gap-4">
         {/* Drives */}
         <Card>
           <CardHeader>
@@ -127,66 +124,6 @@ export default function WizardReview({ allData, onApply, applyMutation }) {
             )}
           </CardContent>
         </Card>
-        
-        {/* Rules */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base flex items-center space-x-2">
-              <Wand2 className="h-5 w-5 text-primary" />
-              <span>Automation Rules</span>
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {enabledRules.length > 0 ? (
-              <div className="space-y-2">
-                {enabledRules.map(rule => (
-                  <div key={rule.id} className="flex items-center space-x-2">
-                    <Check className="h-4 w-4 text-green-500" />
-                    <span className="text-sm">{rule.label}</span>
-                  </div>
-                ))}
-                <div className="pt-2 border-t">
-                  <p className="text-xs text-muted-foreground">
-                    {enabledRules.length} rule{enabledRules.length !== 1 ? 's' : ''} will be active
-                  </p>
-                </div>
-              </div>
-            ) : (
-              <p className="text-sm text-muted-foreground">No rules enabled</p>
-            )}
-          </CardContent>
-        </Card>
-        
-        {/* Overlays */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base flex items-center space-x-2">
-              <Layers className="h-5 w-5 text-primary" />
-              <span>Stream Overlays</span>
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {overlays?.enabled ? (
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm">Preset</span>
-                  <Badge variant="outline">{overlays.preset}</Badge>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-sm">Position</span>
-                  <span className="text-sm text-muted-foreground">
-                    {overlays.position}
-                  </span>
-                </div>
-              </div>
-            ) : (
-              <div className="flex items-center space-x-2 text-muted-foreground">
-                <Settings className="h-4 w-4" />
-                <span className="text-sm">Not configured (optional)</span>
-              </div>
-            )}
-          </CardContent>
-        </Card>
       </div>
       
       {/* What Happens Next */}
@@ -223,22 +160,10 @@ export default function WizardReview({ allData, onApply, applyMutation }) {
               </div>
             </div>
             
-            <div className="flex items-start space-x-3">
-              <div className="w-6 h-6 rounded-full bg-primary/20 flex items-center justify-center flex-shrink-0 mt-0.5">
-                <span className="text-xs font-medium">3</span>
-              </div>
-              <div>
-                <p className="font-medium text-sm">Rules activate</p>
-                <p className="text-xs text-muted-foreground">
-                  Your automation rules will begin processing files based on your settings
-                </p>
-              </div>
-            </div>
-            
             {obs && obs.length > 0 && (
               <div className="flex items-start space-x-3">
                 <div className="w-6 h-6 rounded-full bg-primary/20 flex items-center justify-center flex-shrink-0 mt-0.5">
-                  <span className="text-xs font-medium">4</span>
+                  <span className="text-xs font-medium">3</span>
                 </div>
                 <div>
                   <p className="font-medium text-sm">OBS connects</p>

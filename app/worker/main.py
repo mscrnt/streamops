@@ -192,18 +192,36 @@ class Worker:
     
     async def _start_watchers(self):
         """Start drive watchers"""
-        # Get configured drives from environment or config
-        drives = os.getenv("WATCH_DRIVES", "").split(",")
+        from app.api.db.database import get_db
         
-        for drive in drives:
-            if drive:
-                try:
-                    watcher = DriveWatcher(drive, self.nats)
-                    await watcher.start()
-                    self.watchers.append(watcher)
-                    logger.info(f"Started watcher for {drive}")
-                except Exception as e:
-                    logger.error(f"Failed to start watcher for {drive}: {e}")
+        try:
+            # Get configured drives from database - look for absolute paths in so_roles
+            db = await get_db()
+            cursor = await db.execute("""
+                SELECT DISTINCT abs_path 
+                FROM so_roles 
+                WHERE role IN ('recording', 'editing')
+                AND abs_path IS NOT NULL AND abs_path != ''
+            """)
+            drives = await cursor.fetchall()
+            
+            if not drives:
+                logger.warning("No drives configured for watching in database")
+                return
+            
+            for (drive_path,) in drives:
+                if drive_path and os.path.exists(drive_path):
+                    try:
+                        watcher = DriveWatcher(drive_path, self.nats)
+                        await watcher.start()
+                        self.watchers.append(watcher)
+                        logger.info(f"Started watcher for {drive_path}")
+                    except Exception as e:
+                        logger.error(f"Failed to start watcher for {drive_path}: {e}")
+                else:
+                    logger.warning(f"Drive path does not exist: {drive_path}")
+        except Exception as e:
+            logger.error(f"Failed to get drives from database: {e}")
 
 async def main():
     """Main entry point for worker"""

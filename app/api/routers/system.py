@@ -857,10 +857,23 @@ async def perform_system_action(
                 
                 # Queue scan for each drive to find new files
                 scanned = 0
+                nats_service = request.app.state.nats if hasattr(request.app.state, 'nats') else None
+                
                 for drive_id, drive_path in drives:
                     if os.path.exists(drive_path):
                         logger.info(f"Queuing rescan for drive {drive_id}: {drive_path}")
-                        # In production, this would queue a job to scan for new files
+                        
+                        # Queue an index job for each drive path
+                        if nats_service:
+                            await nats_service.publish_job({
+                                "type": "index",
+                                "input_path": drive_path,
+                                "params": {
+                                    "recursive": True,
+                                    "drive_id": drive_id,
+                                    "deep_scan": True
+                                }
+                            })
                         scanned += 1
                     else:
                         logger.warning(f"Drive path does not exist: {drive_path}")

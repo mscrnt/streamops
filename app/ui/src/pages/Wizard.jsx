@@ -8,8 +8,6 @@ import {
   AlertCircle,
   HardDrive,
   Video,
-  Wand2,
-  Layers,
   Eye
 } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/Card'
@@ -17,8 +15,6 @@ import Button from '@/components/ui/Button'
 import { useApi } from '@/hooks/useApi'
 import WizardDrives from '@/components/wizard/WizardDrives'
 import WizardOBSMulti from '@/components/wizard/WizardOBSMulti'
-import WizardRules from '@/components/wizard/WizardRules'
-import WizardOverlays from '@/components/wizard/WizardOverlays'
 import WizardReview from '@/components/wizard/WizardReview'
 
 const WIZARD_STEPS = [
@@ -37,20 +33,6 @@ const WIZARD_STEPS = [
     component: WizardOBSMulti
   },
   {
-    id: 'rules',
-    title: 'Automations',
-    description: 'Choose recommended automations to process your recordings',
-    icon: Wand2,
-    component: WizardRules
-  },
-  {
-    id: 'overlays',
-    title: 'Overlays',
-    description: 'Set up stream overlays for sponsors and info (optional)',
-    icon: Layers,
-    component: WizardOverlays
-  },
-  {
     id: 'review',
     title: 'Review & Apply',
     description: 'Review your configuration and start StreamOps',
@@ -66,9 +48,7 @@ export default function Wizard() {
   const [currentStep, setCurrentStep] = useState(0)
   const [wizardData, setWizardData] = useState({
     drives: [],
-    obs: [],  // Now an array of connections
-    rules: [],
-    overlays: { enabled: false }
+    obs: []  // Now an array of connections
   })
   const [stepErrors, setStepErrors] = useState({})
   const [isApplying, setIsApplying] = useState(false)
@@ -257,12 +237,8 @@ export default function Wizard() {
         auto_connect: conn.auto_connect !== false,
         roles: conn.roles || []
       })),
-      rules: (wizardData.rules || []).map(rule => ({
-        id: rule.id || '',
-        enabled: rule.enabled || false,
-        parameters: rule.parameters || {}
-      })),
-      overlays: wizardData.overlays || { enabled: false }
+      rules: [],  // Empty rules array for compatibility
+      overlays: { enabled: false }  // Default overlays for compatibility
     }
     
     // Log the exact data being sent
