@@ -155,25 +155,6 @@ RULE_PRESETS = [
         }
     },
     {
-        "id": "generate_thumbnails",
-        "label": "Generate Thumbnails & Previews",
-        "description": "Create poster, sprite sheet, and hover preview for all video files",
-        "category": "processing",
-        "parameters_schema": {
-            "type": "object",
-            "properties": {
-                "poster": {"type": "boolean", "default": True},
-                "sprite": {"type": "boolean", "default": True},
-                "hover": {"type": "boolean", "default": True}
-            }
-        },
-        "defaults": {
-            "poster": True,
-            "sprite": True,
-            "hover": True
-        }
-    },
-    {
         "id": "archive_old",
         "label": "Archive Old Recordings",
         "description": "Move recordings older than 30 days to archive storage",

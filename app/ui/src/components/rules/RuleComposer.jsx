@@ -73,7 +73,6 @@ const ACTION_TYPES = [
   { value: 'move', label: 'Move File', icon: '📁' },
   { value: 'copy', label: 'Copy File', icon: '📋' },
   { value: 'proxy', label: 'Create Proxy', icon: '🎬' },
-  { value: 'thumbnail', label: 'Generate Thumbnails', icon: '🖼️' },
   { value: 'transcode', label: 'Transcode', icon: '🎥' },
   { value: 'tag', label: 'Add Tag', icon: '🏷️' },
   { value: 'webhook', label: 'Call Webhook', icon: '🔗' },
@@ -91,15 +90,6 @@ const PRESET_TEMPLATES = {
       { type: 'ffmpeg_remux', parameters: { container: 'mov', faststart: true } },
       { type: 'move', parameters: { target: '' } }, // Will be selected from roles dropdown
       { type: 'proxy', parameters: { codec: 'dnxhr_lb', if_duration_gt: 900 } }
-    ]
-  },
-  'generate_thumbnails': {
-    conditions: [
-      { field: 'file.extension', operator: 'in', value: ['.mp4', '.mov', '.mkv', '.avi'] },
-      { field: 'file.duration_sec', operator: 'gt', value: 10 }
-    ],
-    actions: [
-      { type: 'thumbnail', parameters: { poster: true, sprite: true, hover: true } }
     ]
   },
   'archive_old': {

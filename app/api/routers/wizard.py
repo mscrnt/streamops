@@ -133,17 +133,6 @@ async def get_wizard_defaults() -> WizardDefaults:
                 }
             },
             {
-                "id": "generate_thumbs",
-                "label": "Generate Thumbnails & Previews",
-                "description": "Create poster frame, sprite sheet, and hover preview for all videos",
-                "enabled_by_default": True,
-                "parameters": {
-                    "poster": True,
-                    "sprite": True,
-                    "hover": True
-                }
-            },
-            {
                 "id": "archive_old",
                 "label": "Archive Old Recordings",
                 "description": "Move recordings older than 90 days to archive storage",
@@ -405,32 +394,6 @@ async def create_rule_from_preset(
             "guardrails": {
                 "pause_if_recording": True,
                 "pause_if_gpu_pct_above": 40
-            }
-        }
-    
-    elif preset_id == "generate_thumbs":
-        return {
-            "name": "Generate Thumbnails and Previews",
-            "description": "Create poster, sprite sheet, and hover preview for videos",
-            "priority": 110,
-            "when": {
-                "all": [
-                    {"field": "event.type", "operator": "=", "value": "asset.indexed"},
-                    {"field": "asset.type", "operator": "=", "value": "video"}
-                ]
-            },
-            "do": [
-                {
-                    "action": "thumbs",
-                    "params": {
-                        "poster": parameters.get("poster", True),
-                        "sprite": parameters.get("sprite", True),
-                        "hover": parameters.get("hover", True)
-                    }
-                }
-            ],
-            "guardrails": {
-                "pause_if_gpu_pct_above": 60
             }
         }
     

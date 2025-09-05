@@ -62,12 +62,6 @@ export default function AssetActionModal({
       description: 'Generate lightweight proxy for smooth editing',
       variant: 'default'
     },
-    thumbnails: {
-      title: 'Generate Thumbnails',
-      icon: Play,
-      description: 'Create poster, sprite sheet, and hover preview',
-      variant: 'default'
-    },
     move: {
       title: 'Move Asset',
       icon: Move,
@@ -340,31 +334,6 @@ export default function AssetActionModal({
               </div>
             )}
             
-            {action === 'thumbnails' && (
-              <div className="space-y-4">
-                <div className="p-3 bg-primary/10 border border-primary/20 rounded-lg">
-                  <p className="text-sm text-primary">
-                    <Info className="w-4 h-4 inline mr-2" />
-                    Will generate poster image, sprite sheet, and hover preview video
-                  </p>
-                </div>
-                
-                <div className="space-y-2 text-sm">
-                  <div className="flex items-center gap-2">
-                    <CheckCircle className="w-4 h-4 text-green-500" />
-                    <span>Poster image at 10% duration</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <CheckCircle className="w-4 h-4 text-green-500" />
-                    <span>3x3 sprite sheet for timeline scrubbing</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <CheckCircle className="w-4 h-4 text-green-500" />
-                    <span>10-second hover preview video</span>
-                  </div>
-                </div>
-              </div>
-            )}
             
             {/* Action buttons */}
             <div className="flex gap-2 pt-2">

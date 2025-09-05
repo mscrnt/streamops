@@ -250,15 +250,7 @@ export default function AssetPreviewDrawer({ assetId, onClose, onAction }) {
                     Proxy
                   </Button>
                 </div>
-                <div className="grid grid-cols-3 gap-2 mt-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => handleAction('thumbnails')}
-                  >
-                    <Film className="w-4 h-4 mr-2" />
-                    Thumbs
-                  </Button>
+                <div className="grid grid-cols-2 gap-2 mt-2">
                   <Button
                     variant="outline"
                     size="sm"
