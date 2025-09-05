@@ -545,19 +545,29 @@ async def get_system_summary(request: Request, db=Depends(get_db)) -> Dict[str, 
             health_status = "critical"
             health_reason = f"Low disk space: {100-disk.percent:.1f}% free"
         
-        # Get GPU info if available
+        # Get GPU info using the GPU service
         gpu_info = {"present": False, "percent": 0}
         try:
-            import pynvml
-            pynvml.nvmlInit()
-            if pynvml.nvmlDeviceGetCount() > 0:
-                handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+            gpu_data = await gpu_service.get_gpu_info()
+            if gpu_data.get("available"):
                 gpu_info = {
                     "present": True,
-                    "percent": pynvml.nvmlDeviceGetUtilizationRates(handle).gpu
+                    "percent": gpu_data.get("utilization", 0)
                 }
-        except:
-            pass
+        except Exception as e:
+            logger.debug(f"Failed to get GPU info: {e}")
+            # Fallback to pynvml if available
+            try:
+                import pynvml
+                pynvml.nvmlInit()
+                if pynvml.nvmlDeviceGetCount() > 0:
+                    handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+                    gpu_info = {
+                        "present": True,
+                        "percent": pynvml.nvmlDeviceGetUtilizationRates(handle).gpu
+                    }
+            except:
+                pass
         
         # Get storage totals across all drives
         storage_used = 0

@@ -3,6 +3,7 @@
 import logging
 import subprocess
 import asyncio
+import os
 from typing import Optional, Dict, Any
 from datetime import datetime, timedelta
 
@@ -70,7 +71,9 @@ class GPUService:
                     info["utilization"] = int(parts[4])
                     info["temperature"] = int(parts[5])
                     
-                    logger.info(f"GPU detected: {info['name']} (Driver: {info['driver_version']})")
+                    logger.debug(f"GPU detected via nvidia-smi: {info['name']} (Driver: {info['driver_version']})")
+            else:
+                logger.debug(f"nvidia-smi failed with code {result[0]}: {result[2]}")
             
             # Check CUDA version
             if info["available"]:
@@ -121,6 +124,35 @@ class GPUService:
         
         except Exception as e:
             logger.warning(f"GPU detection failed: {e}")
+        
+        # If nvidia-smi failed, try alternative detection methods
+        if not info["available"]:
+            # Check if CUDA device is available via environment
+            if "CUDA_VISIBLE_DEVICES" in os.environ:
+                cuda_devices = os.environ["CUDA_VISIBLE_DEVICES"]
+                if cuda_devices and cuda_devices != "-1":
+                    logger.info(f"CUDA devices found in environment: {cuda_devices}")
+                    info["available"] = True
+                    info["vendor"] = "nvidia"
+                    info["name"] = "NVIDIA GPU (via CUDA_VISIBLE_DEVICES)"
+                    
+            # Check for nvidia devices in /dev
+            elif os.path.exists("/dev/nvidia0") or os.path.exists("/dev/nvidiactl"):
+                logger.info("NVIDIA device files found in /dev")
+                info["available"] = True
+                info["vendor"] = "nvidia"
+                info["name"] = "NVIDIA GPU (device files detected)"
+                
+            # Check if FFmpeg has CUDA support
+            if not info["available"]:
+                encoders_result = await self._run_command(["ffmpeg", "-hide_banner", "-encoders"])
+                if encoders_result and encoders_result[0] == 0:
+                    if "h264_nvenc" in encoders_result[1] or "hevc_nvenc" in encoders_result[1]:
+                        logger.info("NVENC detected in FFmpeg - GPU must be present")
+                        info["available"] = True
+                        info["vendor"] = "nvidia"
+                        info["name"] = "NVIDIA GPU (NVENC detected)"
+                        info["hw_encode_available"] = True
         
         return info
     

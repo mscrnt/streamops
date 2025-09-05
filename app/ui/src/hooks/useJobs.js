@@ -20,8 +20,8 @@ export const useJobs = (params = {}) => {
       const response = await api.get('/jobs', { params: queryParams })
       return response.data
     },
-    refetchInterval: 5000, // Refetch every 5 seconds for real-time updates
-    staleTime: 1000, // Consider data stale after 1 second
+    refetchInterval: 1000, // Refetch every 1 second for real-time updates
+    staleTime: 500, // Consider data stale after 0.5 second
   })
 }
 

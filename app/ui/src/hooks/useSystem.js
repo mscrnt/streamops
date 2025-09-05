@@ -11,8 +11,8 @@ export const useSystem = () => {
       const response = await api.get('/system/summary')
       return response.data
     },
-    refetchInterval: 5000,
-    staleTime: 2000
+    refetchInterval: 1000,  // Update every 1 second
+    staleTime: 500
   })
 }
 
