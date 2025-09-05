@@ -101,10 +101,13 @@ class Worker:
             try:
                 # Check guardrails before processing
                 if await self._check_guardrails():
+                    # Mark job as running with started_at timestamp
+                    await self._update_job_status(job_id, "running", None)
+                    
                     # Process the job
                     result = await handler.process(job_data)
                     
-                    # Update job status
+                    # Update job status to completed with ended_at timestamp
                     await self._update_job_status(job_id, "completed", result)
                     
                     # Publish completion event
@@ -120,7 +123,7 @@ class Worker:
                     
             except Exception as e:
                 logger.error(f"Error processing job {job_id}: {e}")
-                await self._update_job_status(job_id, "error", str(e))
+                await self._update_job_status(job_id, "failed", str(e))
                 
                 # Publish error event
                 if self.nats:
@@ -178,14 +181,39 @@ class Worker:
         
         try:
             db = await get_db()
-            await db.execute(
-                """
-                UPDATE so_jobs 
-                SET state = ?, error = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-                """,
-                (status, result if status == "error" else None, job_id)
-            )
+            
+            # Build the update query based on status
+            if status == "running":
+                # Set started_at when job starts
+                await db.execute(
+                    """
+                    UPDATE so_jobs 
+                    SET state = ?, started_at = datetime('now'), updated_at = datetime('now')
+                    WHERE id = ?
+                    """,
+                    (status, job_id)
+                )
+            elif status in ["completed", "failed"]:
+                # Set ended_at when job finishes
+                await db.execute(
+                    """
+                    UPDATE so_jobs 
+                    SET state = ?, error = ?, ended_at = datetime('now'), updated_at = datetime('now')
+                    WHERE id = ?
+                    """,
+                    (status, result if status == "failed" else None, job_id)
+                )
+            else:
+                # For other states (paused, etc)
+                await db.execute(
+                    """
+                    UPDATE so_jobs 
+                    SET state = ?, error = ?, updated_at = datetime('now')
+                    WHERE id = ?
+                    """,
+                    (status, result if status == "error" else None, job_id)
+                )
+            
             await db.commit()
         except Exception as e:
             logger.error(f"Failed to update job status: {e}")

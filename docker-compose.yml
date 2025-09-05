@@ -36,6 +36,7 @@ services:
       - ROLE=all
       - NATS_ENABLE=true
       - LOG_LEVEL=info
+      - TZ=America/Los_Angeles
       
       # Mount configuration
       - SO_MOUNT_1_PATH=${SO_MOUNT_1_PATH:-/mnt/drive_d}

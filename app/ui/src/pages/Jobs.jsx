@@ -344,15 +344,29 @@ export default function Jobs() {
   
   // Format duration for display
   const formatJobDuration = (job) => {
+    // If duration_sec is provided, use it
     if (job.duration_sec) {
       return formatDuration(job.duration_sec)
     }
+    
+    // For running jobs, calculate from started_at to now
     if ((job.state || job.status) === 'running' && job.started_at) {
       const started = new Date(job.started_at)
       const now = new Date()
       const sec = Math.floor((now - started) / 1000)
       return formatDuration(sec)
     }
+    
+    // For completed/failed jobs, calculate from started_at to ended_at
+    if (job.started_at && job.ended_at) {
+      const started = new Date(job.started_at)
+      const ended = new Date(job.ended_at)
+      const sec = Math.floor((ended - started) / 1000)
+      if (sec >= 0) {
+        return formatDuration(sec)
+      }
+    }
+    
     return '—'
   }
   
@@ -728,28 +742,64 @@ export default function Jobs() {
                         </div>
                       </td>
                       <td className="p-3">
-                        {(job.state || job.status) === 'running' && job.progress > 0 ? (
-                          <div className="w-32">
-                            <div className="flex items-center gap-2 mb-1">
-                              <span className="text-sm font-medium">
-                                {Math.round(job.progress)}%
-                              </span>
-                              {job.eta_sec && (
-                                <span className="text-xs text-muted-foreground">
-                                  ETA {formatDuration(job.eta_sec)}
-                                </span>
-                              )}
-                            </div>
-                            <div className="h-2 bg-muted rounded-full overflow-hidden">
-                              <div
-                                className="h-full bg-primary transition-all duration-300"
-                                style={{ width: `${job.progress}%` }}
-                              />
-                            </div>
-                          </div>
-                        ) : (
-                          <span className="text-muted-foreground">—</span>
-                        )}
+                        {(() => {
+                          const status = job.state || job.status
+                          
+                          // Show progress bar for running jobs
+                          if (status === 'running' && job.progress > 0) {
+                            return (
+                              <div className="w-32">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <span className="text-sm font-medium">
+                                    {Math.round(job.progress)}%
+                                  </span>
+                                  {job.eta_sec && (
+                                    <span className="text-xs text-muted-foreground">
+                                      ETA {formatDuration(job.eta_sec)}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="h-2 bg-muted rounded-full overflow-hidden">
+                                  <div
+                                    className="h-full bg-primary transition-all duration-300"
+                                    style={{ width: `${job.progress}%` }}
+                                  />
+                                </div>
+                              </div>
+                            )
+                          }
+                          
+                          // Show 100% for completed jobs
+                          if (status === 'completed') {
+                            return (
+                              <span className="text-sm text-success">100%</span>
+                            )
+                          }
+                          
+                          // Show appropriate text for other states
+                          if (status === 'failed') {
+                            return (
+                              <span className="text-sm text-destructive">Failed</span>
+                            )
+                          }
+                          
+                          if (status === 'canceled') {
+                            return (
+                              <span className="text-sm text-muted-foreground">Canceled</span>
+                            )
+                          }
+                          
+                          if (status === 'queued' || status === 'pending') {
+                            return (
+                              <span className="text-sm text-muted-foreground">Queued</span>
+                            )
+                          }
+                          
+                          // Default
+                          return (
+                            <span className="text-muted-foreground">—</span>
+                          )
+                        })()}
                       </td>
                       <td className="p-3">
                         <span className="text-sm">

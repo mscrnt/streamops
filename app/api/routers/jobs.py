@@ -202,6 +202,15 @@ async def list_jobs(
             progress = payload.get('progress', row_dict.get('progress', 0.0) or 0.0)
             eta_sec = payload.get('eta_sec', None)
             
+            # Ensure timestamps have timezone indicators (UTC)
+            def ensure_utc_timestamp(timestamp_str):
+                if not timestamp_str:
+                    return None
+                # If timestamp doesn't have timezone info, append 'Z' for UTC
+                if 'Z' not in timestamp_str and '+' not in timestamp_str and timestamp_str[-6] != '-':
+                    return timestamp_str + 'Z'
+                return timestamp_str
+            
             items.append(JobItem(
                 id=row_dict.get('id', ''),
                 type=row_dict.get('type', ''),
@@ -210,14 +219,14 @@ async def list_jobs(
                 state='deferred' if row_dict.get('deferred') else row_dict.get('state', row_dict.get('status', 'unknown')),
                 progress=progress * 100 if progress <= 1 else progress,
                 eta_sec=eta_sec,
-                created_at=row_dict.get('created_at', datetime.utcnow().isoformat()),
-                started_at=row_dict.get('started_at'),
-                ended_at=row_dict.get('ended_at'),
+                created_at=ensure_utc_timestamp(row_dict.get('created_at')) or datetime.utcnow().isoformat() + 'Z',
+                started_at=ensure_utc_timestamp(row_dict.get('started_at')),
+                ended_at=ensure_utc_timestamp(row_dict.get('ended_at')),
                 duration_sec=duration_sec,
                 error=row_dict.get('error'),
                 deferred=bool(row_dict.get('deferred', False)),
                 blocked_reason=row_dict.get('blocked_reason'),
-                next_run_at=row_dict.get('next_run_at'),
+                next_run_at=ensure_utc_timestamp(row_dict.get('next_run_at')),
                 attempts=row_dict.get('attempts', 0)
             ))
         
