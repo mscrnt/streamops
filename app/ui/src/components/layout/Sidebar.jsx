@@ -59,7 +59,10 @@ export default function Sidebar() {
       sidebarCollapsed ? "w-16" : "w-64"
     )}>
       {/* Header */}
-      <div className="h-16 flex items-center justify-between px-4 border-b border-border">
+      <div className={cn(
+        "h-16 flex items-center border-b border-border",
+        sidebarCollapsed ? "justify-center" : "justify-between px-4"
+      )}>
         {!sidebarCollapsed && (
           <div className="flex items-center space-x-2">
             <Activity className="h-6 w-6 text-primary" />
@@ -68,10 +71,7 @@ export default function Sidebar() {
         )}
         <button
           onClick={toggleSidebar}
-          className={cn(
-            "p-1 rounded-md hover:bg-accent transition-colors",
-            sidebarCollapsed && "mx-auto"
-          )}
+          className="flex items-center justify-center w-9 h-9 rounded-md hover:bg-accent transition-colors focus:outline-none focus-visible:outline-none"
         >
           <ChevronLeft 
             className={cn(
@@ -93,6 +93,7 @@ export default function Sidebar() {
               className={({ isActive }) =>
                 cn(
                   "flex items-center py-2 text-sm font-medium rounded-md transition-colors relative",
+                  "focus:outline-none focus-visible:outline-none",
                   sidebarCollapsed ? "px-0 justify-center" : "px-3",
                   "hover:bg-accent hover:text-accent-foreground",
                   isActive
