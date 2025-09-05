@@ -13,10 +13,7 @@ import Wizard from './pages/Wizard'
 
 // Settings pages
 import SystemSettings from './pages/settings/SystemSettings'
-import ProcessingSettings from './pages/settings/ProcessingSettings'
-import StorageSettings from './pages/settings/StorageSettings'
 import OBSSettings from './pages/settings/OBSSettings'
-import GuardrailsSettings from './pages/settings/GuardrailsSettings'
 import NotificationsSettings from './pages/settings/NotificationsSettings'
 import SecuritySettings from './pages/settings/SecuritySettings'
 import { useApi } from './hooks/useApi'
@@ -56,10 +53,7 @@ function App() {
         <Route path="settings" element={<SettingsLayout />}>
           <Route index element={<Navigate to="/settings/system" replace />} />
           <Route path="system" element={<SystemSettings />} />
-          <Route path="processing" element={<ProcessingSettings />} />
-          <Route path="storage" element={<StorageSettings />} />
           <Route path="obs" element={<OBSSettings />} />
-          <Route path="guardrails" element={<GuardrailsSettings />} />
           <Route path="notifications" element={<NotificationsSettings />} />
           <Route path="security" element={<SecuritySettings />} />
         </Route>

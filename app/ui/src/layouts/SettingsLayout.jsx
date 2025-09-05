@@ -1,7 +1,7 @@
 import React from 'react';
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { 
-  Settings, HardDrive, Cpu, Video, Shield, 
+  Settings, Video, 
   Bell, Lock, Server, ChevronRight 
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -25,28 +25,10 @@ const SettingsLayout = () => {
       description: 'Version, platform, and runtime information'
     },
     { 
-      path: '/settings/processing', 
-      label: 'Processing', 
-      icon: Cpu,
-      description: 'FFmpeg, hardware acceleration, and encoding'
-    },
-    { 
-      path: '/settings/storage', 
-      label: 'Storage', 
-      icon: HardDrive,
-      description: 'Cache, cleanup policies, and deduplication'
-    },
-    { 
       path: '/settings/obs', 
       label: 'OBS', 
       icon: Video,
       description: 'WebSocket connection and recording detection'
-    },
-    { 
-      path: '/settings/guardrails', 
-      label: 'Guardrails', 
-      icon: Shield,
-      description: 'Processing limits and safety thresholds'
     },
     { 
       path: '/settings/notifications', 
