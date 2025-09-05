@@ -40,13 +40,13 @@ export default function QuickActions({ onAction, disabled }) {
     },
     {
       id: 'reindex_assets',
-      label: 'Reindex Assets',
+      label: 'Reindex Recordings',
       icon: FolderSync,
-      description: 'Scan drives and update asset database',
+      description: 'Scan drives and update recordings database',
       variant: 'outline',
       requiresConfirm: true,
-      confirmTitle: 'Reindex All Assets?',
-      confirmDescription: 'This will scan all configured drives and update the asset database. This may take several minutes depending on the number of files.'
+      confirmTitle: 'Reindex All Recordings?',
+      confirmDescription: 'This will scan all configured drives and update the recordings database. This may take several minutes depending on the number of files.'
     },
     {
       id: 'clear_completed_jobs',

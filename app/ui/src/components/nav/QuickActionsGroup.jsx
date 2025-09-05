@@ -57,9 +57,9 @@ export default function QuickActionsGroup() {
     },
     {
       id: 'reindex_assets',
-      label: 'Reindex Assets',
+      label: 'Reindex Recordings',
       icon: FolderSync,
-      description: 'Scan all drives and rebuild the asset index',
+      description: 'Scan all drives and rebuild the recordings index',
       variant: 'ghost'
     },
     {

@@ -186,7 +186,7 @@ export default function Assets() {
   
   const handleBulkAction = useCallback((action) => {
     if (selectedAssets.size === 0) {
-      toast.error('No assets selected')
+      toast.error('No recordings selected')
       return
     }
     
@@ -388,7 +388,7 @@ export default function Assets() {
           <Card>
             <CardContent className="p-12 text-center">
               <FolderOpen className="w-12 h-12 mx-auto mb-4 text-muted-foreground" />
-              <h3 className="text-lg font-semibold mb-2">No assets found</h3>
+              <h3 className="text-lg font-semibold mb-2">No recordings found</h3>
               <p className="text-muted-foreground mb-4">
                 {search || types || status || tags
                   ? 'Try adjusting your filters or search query'

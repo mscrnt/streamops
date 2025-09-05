@@ -22,7 +22,7 @@ const navigation = [
     icon: LayoutDashboard,
   },
   {
-    name: 'Assets',
+    name: 'Recordings',
     href: '/assets',
     icon: FolderOpen,
   },

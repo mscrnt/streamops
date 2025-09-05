@@ -320,7 +320,7 @@ export default function RecentAssetsList({ assets, loading, onViewAll }) {
                 variant="outline"
                 onClick={() => navigate('/assets')}
               >
-                View All Assets
+                View All Recordings
               </Button>
             </div>
           </div>
