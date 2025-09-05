@@ -92,12 +92,12 @@ export default function Sidebar() {
               to={item.href}
               className={({ isActive }) =>
                 cn(
-                  "flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors relative",
+                  "flex items-center py-2 text-sm font-medium rounded-md transition-colors relative",
+                  sidebarCollapsed ? "px-0 justify-center" : "px-3",
                   "hover:bg-accent hover:text-accent-foreground",
                   isActive
                     ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground",
-                  sidebarCollapsed && "justify-center"
+                    : "text-muted-foreground"
                 )
               }
               title={sidebarCollapsed ? item.name : undefined}
@@ -124,14 +124,18 @@ export default function Sidebar() {
       </nav>
 
       {/* Footer */}
-      <div className="border-t border-border p-4 space-y-3">
+      <div className={cn(
+        "border-t border-border space-y-2",
+        sidebarCollapsed ? "p-2" : "p-4"
+      )}>
         {/* Theme Toggle */}
         <button
           onClick={toggleTheme}
           className={cn(
-            "w-full flex items-center space-x-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors",
-            sidebarCollapsed && "justify-center"
+            "w-full flex items-center text-sm font-medium text-muted-foreground hover:text-foreground transition-colors focus:outline-none focus-visible:outline-none",
+            sidebarCollapsed ? "justify-center" : "gap-2"
           )}
+          style={{ outline: 'none' }}
           title={sidebarCollapsed ? (theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode') : undefined}
         >
           {theme === 'dark' ? (
@@ -150,8 +154,8 @@ export default function Sidebar() {
           target="_blank"
           rel="noopener noreferrer"
           className={cn(
-            "flex items-center space-x-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors",
-            sidebarCollapsed && "justify-center"
+            "flex items-center text-sm font-medium text-muted-foreground hover:text-foreground transition-colors",
+            sidebarCollapsed ? "justify-center" : "gap-2"
           )}
           title={sidebarCollapsed ? "Buy me a coffee" : undefined}
         >
