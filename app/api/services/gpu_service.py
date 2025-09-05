@@ -1,7 +1,6 @@
 """GPU detection and management service"""
 
 import logging
-import subprocess
 import asyncio
 import os
 from typing import Optional, Dict, Any

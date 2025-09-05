@@ -8,7 +8,9 @@ import {
   Zap,
   ChevronLeft,
   Activity,
-  Coffee
+  Coffee,
+  Sun,
+  Moon
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useStore } from '@/store/useStore'
@@ -49,7 +51,7 @@ const navigation = [
 ]
 
 export default function Sidebar() {
-  const { sidebarCollapsed, toggleSidebar } = useStore()
+  const { sidebarCollapsed, toggleSidebar, theme, toggleTheme } = useStore()
   
   return (
     <div className={cn(
@@ -122,7 +124,27 @@ export default function Sidebar() {
       </nav>
 
       {/* Footer */}
-      <div className="border-t border-border p-4">
+      <div className="border-t border-border p-4 space-y-3">
+        {/* Theme Toggle */}
+        <button
+          onClick={toggleTheme}
+          className={cn(
+            "w-full flex items-center space-x-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors",
+            sidebarCollapsed && "justify-center"
+          )}
+          title={sidebarCollapsed ? (theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode') : undefined}
+        >
+          {theme === 'dark' ? (
+            <Sun className="h-5 w-5" />
+          ) : (
+            <Moon className="h-5 w-5" />
+          )}
+          {!sidebarCollapsed && (
+            <span>{theme === 'dark' ? 'Light Mode' : 'Dark Mode'}</span>
+          )}
+        </button>
+        
+        {/* Buy me a coffee */}
         <a
           href="https://buymeacoffee.com/mscrnt"
           target="_blank"

@@ -2,7 +2,7 @@ import React from 'react';
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { 
   Settings, HardDrive, Cpu, Video, Shield, 
-  Bell, Lock, Palette, Server, ChevronRight 
+  Bell, Lock, Server, ChevronRight 
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -59,12 +59,6 @@ const SettingsLayout = () => {
       label: 'Security', 
       icon: Lock,
       description: 'Authentication, HTTPS, and backups'
-    },
-    { 
-      path: '/settings/interface', 
-      label: 'Interface', 
-      icon: Palette,
-      description: 'Theme, layout, and display preferences'
     }
   ];
 

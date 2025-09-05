@@ -6,7 +6,7 @@ export const useStore = create(
   persist(
     (set, get) => ({
       // UI State
-      theme: 'light',
+      theme: 'dark', // Default to dark theme
       sidebarCollapsed: false,
       
       // System State

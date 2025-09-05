@@ -19,7 +19,6 @@ import OBSSettings from './pages/settings/OBSSettings'
 import GuardrailsSettings from './pages/settings/GuardrailsSettings'
 import NotificationsSettings from './pages/settings/NotificationsSettings'
 import SecuritySettings from './pages/settings/SecuritySettings'
-import InterfaceSettings from './pages/settings/InterfaceSettings'
 import { useApi } from './hooks/useApi'
 
 function App() {
@@ -63,7 +62,6 @@ function App() {
           <Route path="guardrails" element={<GuardrailsSettings />} />
           <Route path="notifications" element={<NotificationsSettings />} />
           <Route path="security" element={<SecuritySettings />} />
-          <Route path="interface" element={<InterfaceSettings />} />
         </Route>
       </Route>
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
