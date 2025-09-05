@@ -158,22 +158,7 @@ export const useReindexAsset = () => {
   })
 }
 
-// Asset thumbnail regeneration
-export const useRegenerateThumbnails = () => {
-  const queryClient = useQueryClient()
-  const { api } = useApi()
-
-  return useMutation({
-    mutationFn: async (assetId) => {
-      const response = await api.post(`/assets/${assetId}/thumbnails/regenerate`)
-      return response.data
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['assets'] })
-      toast.success('Thumbnail regeneration started')
-    }
-  })
-}
+// Thumbnail regeneration removed - videos preview natively
 
 // Asset tags management
 export const useAssetTags = (assetId) => {

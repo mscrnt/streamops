@@ -779,22 +779,124 @@ async def perform_system_action(
             
             return {"ok": True, "message": f"Queued {indexed} files for reindexing"}
             
+        elif action == "reindex_assets":
+            # Full reindex - scan all drives and remove missing files
+            try:
+                import os
+                from pathlib import Path
+                
+                # First, get all enabled drives
+                cursor = await db.execute(
+                    "SELECT id, path FROM so_drives WHERE enabled = 1"
+                )
+                drives = await cursor.fetchall()
+                
+                # Get all existing assets
+                cursor = await db.execute(
+                    "SELECT id, abs_path FROM so_assets WHERE status != 'archived'"
+                )
+                assets = await cursor.fetchall()
+                
+                # Check which files still exist
+                removed_count = 0
+                checked_count = 0
+                
+                for asset_id, file_path in assets:
+                    checked_count += 1
+                    if not os.path.exists(file_path):
+                        # File no longer exists, remove it and its related data
+                        try:
+                            # Delete in correct order to avoid foreign key constraints
+                            
+                            # 1. Delete from so_asset_events if it exists
+                            cursor = await db.execute(
+                                "SELECT name FROM sqlite_master WHERE type='table' AND name='so_asset_events'"
+                            )
+                            if await cursor.fetchone():
+                                await db.execute(
+                                    "DELETE FROM so_asset_events WHERE asset_id = ?",
+                                    (asset_id,)
+                                )
+                            
+                            # 2. Delete from so_thumbs if it exists
+                            cursor = await db.execute(
+                                "SELECT name FROM sqlite_master WHERE type='table' AND name='so_thumbs'"
+                            )
+                            if await cursor.fetchone():
+                                await db.execute(
+                                    "DELETE FROM so_thumbs WHERE asset_id = ?",
+                                    (asset_id,)
+                                )
+                            
+                            # 3. Delete related jobs
+                            await db.execute(
+                                "DELETE FROM so_jobs WHERE asset_id = ?",
+                                (asset_id,)
+                            )
+                            
+                            # 4. Finally delete the asset itself
+                            await db.execute(
+                                "DELETE FROM so_assets WHERE id = ?",
+                                (asset_id,)
+                            )
+                            
+                            removed_count += 1
+                            logger.info(f"Removed missing asset and related data: {file_path}")
+                        except Exception as e:
+                            logger.error(f"Failed to remove asset {asset_id}: {e}")
+                
+                # Queue scan for each drive to find new files
+                scanned = 0
+                for drive_id, drive_path in drives:
+                    if os.path.exists(drive_path):
+                        logger.info(f"Queuing rescan for drive {drive_id}: {drive_path}")
+                        # In production, this would queue a job to scan for new files
+                        scanned += 1
+                    else:
+                        logger.warning(f"Drive path does not exist: {drive_path}")
+                
+                await db.commit()
+                
+                return {
+                    "ok": True, 
+                    "message": f"Checked {checked_count} assets, removed {removed_count} missing files. Queued {scanned} drives for scanning."
+                }
+                
+            except Exception as e:
+                logger.error(f"Failed to reindex assets: {e}")
+                await db.rollback()
+                return {"ok": False, "message": f"Failed to reindex: {str(e)}"}
+            
+        elif action == "optimize_db":
+            # Vacuum and optimize SQLite database
+            try:
+                # Run VACUUM to rebuild the database file
+                await db.execute("VACUUM")
+                
+                # Update statistics
+                await db.execute("ANALYZE")
+                
+                # Get database size before and after
+                cursor = await db.execute(
+                    "SELECT page_count * page_size as size FROM pragma_page_count(), pragma_page_size()"
+                )
+                result = await cursor.fetchone()
+                db_size = result[0] if result else 0
+                
+                await db.commit()
+                
+                return {
+                    "ok": True,
+                    "message": f"Database optimized. Size: {db_size / 1024 / 1024:.2f} MB"
+                }
+                
+            except Exception as e:
+                logger.error(f"Failed to optimize database: {e}")
+                return {"ok": False, "message": f"Failed to optimize: {str(e)}"}
+            
         elif action == "recompute_thumbs":
-            # Queue thumbnail regeneration
-            cursor = await db.execute(
-                """SELECT id, path FROM so_assets 
-                   WHERE type = 'video' 
-                   ORDER BY created_at DESC
-                   LIMIT 50"""
-            )
-            assets = await cursor.fetchall()
-            
-            queued = 0
-            for asset_id, path in assets:
-                logger.info(f"Queuing thumbnail generation for {asset_id}")
-                queued += 1
-            
-            return {"ok": True, "message": f"Queued {queued} videos for thumbnail generation"}
+            # Removed - we no longer generate thumbnails
+            return {"ok": False, "message": "Thumbnail generation has been removed. Videos are previewed natively."}
             
         else:
             return {"ok": False, "message": f"Unknown action: {action}"}

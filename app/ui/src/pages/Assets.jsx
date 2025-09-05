@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { 
-  Grid3x3, List, Search, Filter, ChevronDown, RefreshCw,
+  Grid3x3, List, Search, RefreshCw,
   MoreVertical, Download, Archive, Trash2, Copy, Move,
   Play, Image, Music, FileText, CheckSquare, Square,
   X, ChevronRight, Eye, Loader2, AlertCircle, FolderOpen
@@ -41,8 +41,6 @@ export default function Assets() {
   const [previewAssetId, setPreviewAssetId] = useState(null)
   const [actionModal, setActionModal] = useState(null)
   const [videoPlayerAssetId, setVideoPlayerAssetId] = useState(null)
-  const [showSearch, setShowSearch] = useState(!!search)
-  const [showFilters, setShowFilters] = useState(false)
   const [localSearch, setLocalSearch] = useState(search)
   const [activeMenuId, setActiveMenuId] = useState(null)
   
@@ -145,9 +143,6 @@ export default function Assets() {
     updateParams({ sort: newSort })
   }, [updateParams])
   
-  const handleFilter = useCallback((filterType, value) => {
-    updateParams({ [filterType]: value, page: '1' })
-  }, [updateParams])
   
   const handlePageChange = useCallback((newPage) => {
     updateParams({ page: newPage.toString() })
@@ -195,12 +190,8 @@ export default function Assets() {
       return
     }
     
-    if (action === 'thumbnails') {
-      // No modal needed for thumbnails
-      bulkActionMutation.mutate({ action, params: {} })
-    } else {
-      setActionModal({ bulk: true, action })
-    }
+    // Thumbnail generation removed - videos preview natively
+    setActionModal({ bulk: true, action })
   }, [selectedAssets, bulkActionMutation])
   
   // Keyboard shortcuts
@@ -316,69 +307,57 @@ export default function Assets() {
               </Button>
             </div>
             
-            {/* Filters */}
-            <Button
-              variant={showFilters ? 'default' : 'outline'}
-              size="sm"
-              onClick={() => setShowFilters(!showFilters)}
-            >
-              <Filter className="w-4 h-4 mr-2" />
-              Filters
-              {(types || status || tags) && (
-                <Badge variant="secondary" className="ml-2">
-                  {[types, status, tags].filter(Boolean).length}
-                </Badge>
-              )}
-            </Button>
-            
             {/* Sort */}
             <div className="relative">
-              <Button variant="outline" size="sm">
-                Sort: {sort.split(':')[0]}
-                <ChevronDown className="w-4 h-4 ml-2" />
-              </Button>
-              {/* Sort dropdown would go here */}
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-muted-foreground">Sort:</span>
+                <select
+                  value={sort}
+                  onChange={(e) => handleSort(e.target.value)}
+                  className="px-3 py-1.5 text-sm border border-input rounded-lg bg-background"
+                >
+                  <option value="created_at:desc">Newest first</option>
+                  <option value="created_at:asc">Oldest first</option>
+                  <option value="abs_path:asc">Path (A-Z)</option>
+                  <option value="abs_path:desc">Path (Z-A)</option>
+                  <option value="size:desc">Largest first</option>
+                  <option value="size:asc">Smallest first</option>
+                  <option value="updated_at:desc">Recently updated</option>
+                  <option value="updated_at:asc">Least recently updated</option>
+                </select>
+              </div>
+            </div>
+            
+            {/* Search */}
+            <div className="flex items-center gap-2">
+              <Search className="w-4 h-4 text-muted-foreground" />
+              <input
+                type="text"
+                value={localSearch}
+                onChange={(e) => setLocalSearch(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+                placeholder="Search assets..."
+                className="w-64 px-3 py-1.5 text-sm border border-input rounded-lg bg-background"
+              />
+              {localSearch && (
+                <Button 
+                  size="sm" 
+                  variant="ghost" 
+                  onClick={() => {
+                    setLocalSearch('')
+                    if (search) {
+                      updateParams({ search: '' })
+                    }
+                  }}
+                  className="h-7 px-2"
+                >
+                  Clear
+                </Button>
+              )}
             </div>
           </div>
           
           <div className="flex items-center gap-2">
-            {/* Search */}
-            {showSearch ? (
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  value={localSearch}
-                  onChange={(e) => setLocalSearch(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-                  placeholder="Search assets..."
-                  className="px-3 py-1.5 text-sm border border-input rounded-lg bg-background"
-                  autoFocus
-                />
-                <Button size="sm" onClick={handleSearch}>
-                  Search
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    setShowSearch(false)
-                    setLocalSearch('')
-                    updateParams({ search: '' })
-                  }}
-                >
-                  <X className="w-4 h-4" />
-                </Button>
-              </div>
-            ) : (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setShowSearch(true)}
-              >
-                <Search className="w-4 h-4" />
-              </Button>
-            )}
-            
             {/* Refresh */}
             <Button
               variant="outline"
@@ -390,58 +369,6 @@ export default function Assets() {
             </Button>
           </div>
         </div>
-        
-        {/* Filter bar */}
-        {showFilters && (
-          <div className="px-4 pb-4 flex items-center gap-2 flex-wrap">
-            {/* Type filter */}
-            <select
-              value={types}
-              onChange={(e) => handleFilter('types', e.target.value)}
-              className="px-3 py-1.5 text-sm border border-input rounded-lg bg-background"
-            >
-              <option value="">All types</option>
-              <option value="video">Video</option>
-              <option value="audio">Audio</option>
-              <option value="image">Image</option>
-              <option value="other">Other</option>
-            </select>
-            
-            {/* Status filter */}
-            <select
-              value={status}
-              onChange={(e) => handleFilter('status', e.target.value)}
-              className="px-3 py-1.5 text-sm border border-input rounded-lg bg-background"
-            >
-              <option value="">All status</option>
-              <option value="indexed">Indexed</option>
-              <option value="pending">Pending</option>
-              <option value="failed">Failed</option>
-              <option value="archived">Archived</option>
-              <option value="missing">Missing</option>
-            </select>
-            
-            {/* Clear filters */}
-            {(types || status || tags || search) && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  updateParams({
-                    types: '',
-                    status: '',
-                    tags: '',
-                    search: '',
-                    page: '1'
-                  })
-                  setLocalSearch('')
-                }}
-              >
-                Clear all
-              </Button>
-            )}
-          </div>
-        )}
       </div>
       
       {/* Bulk action bar */}
@@ -508,16 +435,61 @@ export default function Assets() {
               <Card
                 key={asset.id}
                 className={cn(
-                  "relative group cursor-pointer transition-all",
+                  "relative group cursor-pointer transition-all overflow-hidden",
                   selectedAssets.has(asset.id) && "ring-2 ring-primary"
                 )}
-                onClick={() => handleAssetAction(asset.id, 'preview')}
+                onClick={() => setVideoPlayerAssetId(asset.id)}
               >
                 <div className="aspect-video bg-muted relative overflow-hidden">
-                  {/* Thumbnail would go here */}
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    {getAssetIcon(asset)}
-                  </div>
+                  {/* Video preview for video assets */}
+                  {asset.asset_type === 'video' || asset.container?.toLowerCase() === 'matroska' || asset.container?.toLowerCase() === 'quicktime' || asset.filename?.match(/\.(mp4|mkv|mov|avi|webm)$/i) ? (
+                    <video
+                      className="w-full h-full object-cover"
+                      src={`/api/assets/${asset.id}/stream`}
+                      preload="metadata"
+                      muted
+                      playsInline
+                      onMouseMove={(e) => {
+                        const video = e.currentTarget
+                        const rect = video.getBoundingClientRect()
+                        const x = e.clientX - rect.left
+                        const percent = x / rect.width
+                        if (video.duration) {
+                          video.currentTime = video.duration * percent
+                        }
+                      }}
+                      onMouseEnter={(e) => {
+                        const video = e.currentTarget
+                        video.setAttribute('data-hovering', 'true')
+                      }}
+                      onMouseLeave={(e) => {
+                        const video = e.currentTarget
+                        video.removeAttribute('data-hovering')
+                        if (video.duration) {
+                          video.currentTime = Math.min(5, video.duration * 0.1)
+                        }
+                      }}
+                      onLoadedMetadata={(e) => {
+                        const video = e.currentTarget
+                        if (!video.hasAttribute('data-hovering')) {
+                          video.currentTime = Math.min(5, video.duration * 0.1)
+                        }
+                      }}
+                    />
+                  ) : (
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      {getAssetIcon(asset)}
+                    </div>
+                  )}
+                  
+                  {/* Play overlay for video */}
+                  {(asset.asset_type === 'video' || asset.container?.toLowerCase() === 'matroska' || asset.container?.toLowerCase() === 'quicktime' || asset.filename?.match(/\.(mp4|mkv|mov|avi|webm)$/i)) && (
+                    <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                      <div className="bg-black/50 rounded-full p-3">
+                        <Play className="w-8 h-8 text-white fill-white" />
+                      </div>
+                    </div>
+                  )}
                   
                   {/* Selection checkbox */}
                   <button
@@ -552,14 +524,27 @@ export default function Assets() {
                   </div>
                 </div>
                 
-                <CardContent className="p-3">
+                <CardContent className="p-3 space-y-2">
                   <p className="font-medium text-sm truncate">{asset.filename || asset.name || 'Untitled'}</p>
-                  <div className="flex items-center gap-2 mt-1 text-xs text-muted-foreground">
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
                     <span>{formatBytes(asset.metadata?.size_bytes || 0)}</span>
                     {asset.metadata?.duration && (
                       <span>{formatDuration(asset.metadata.duration)}</span>
                     )}
                   </div>
+                  {/* Details button at bottom */}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      handleAssetAction(asset.id, 'preview')
+                    }}
+                  >
+                    <Eye className="w-3 h-3 mr-2" />
+                    Details
+                  </Button>
                 </CardContent>
               </Card>
             ))}

@@ -62,15 +62,6 @@ export default function BulkActionBar({
           <Button 
             size="sm"
             variant="outline"
-            onClick={() => onAction('thumbnails')}
-          >
-            <Film className="w-4 h-4 mr-2" />
-            Thumbnails
-          </Button>
-          
-          <Button 
-            size="sm"
-            variant="outline"
             onClick={() => onAction('move')}
           >
             <Move className="w-4 h-4 mr-2" />

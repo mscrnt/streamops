@@ -1,4 +1,4 @@
-import { RefreshCw, FolderSync, Image, Trash2, HardDrive, Database } from 'lucide-react'
+import { RefreshCw, FolderSync, Trash2, HardDrive, Database } from 'lucide-react'
 import Button from '@/components/ui/Button'
 import {
   AlertDialog,
@@ -35,9 +35,6 @@ export default function QuickActionsGroup() {
         case 'reindex_assets':
           queryClient.invalidateQueries(['assets'])
           break
-        case 'regenerate_thumbnails':
-          queryClient.invalidateQueries(['assets'])
-          break
         case 'clear_completed':
           queryClient.invalidateQueries(['jobs'])
           break
@@ -63,13 +60,6 @@ export default function QuickActionsGroup() {
       label: 'Reindex Assets',
       icon: FolderSync,
       description: 'Scan all drives and rebuild the asset index',
-      variant: 'ghost'
-    },
-    {
-      id: 'regenerate_thumbnails',
-      label: 'Regenerate Thumbnails',
-      icon: Image,
-      description: 'Create missing thumbnails for all assets',
       variant: 'ghost'
     },
     {

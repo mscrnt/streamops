@@ -7,7 +7,8 @@ import {
   HardDrive, 
   Zap,
   ChevronLeft,
-  Activity
+  Activity,
+  Coffee
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useStore } from '@/store/useStore'
@@ -122,13 +123,19 @@ export default function Sidebar() {
 
       {/* Footer */}
       <div className="border-t border-border p-4">
-        <div className={cn(
-          "flex items-center space-x-2 text-xs text-muted-foreground",
-          sidebarCollapsed && "justify-center"
-        )}>
-          <div className="h-2 w-2 bg-green-500 rounded-full animate-pulse-success" />
-          {!sidebarCollapsed && <span>System Online</span>}
-        </div>
+        <a
+          href="https://buymeacoffee.com/mscrnt"
+          target="_blank"
+          rel="noopener noreferrer"
+          className={cn(
+            "flex items-center space-x-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors",
+            sidebarCollapsed && "justify-center"
+          )}
+          title={sidebarCollapsed ? "Buy me a coffee" : undefined}
+        >
+          <Coffee className="h-5 w-5" />
+          {!sidebarCollapsed && <span>Buy me a coffee</span>}
+        </a>
       </div>
     </div>
   )

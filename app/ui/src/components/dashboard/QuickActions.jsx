@@ -2,7 +2,6 @@ import { useState } from 'react'
 import { 
   RefreshCw, 
   FolderSync, 
-  Image, 
   PlayCircle,
   StopCircle,
   Trash2,
@@ -50,16 +49,6 @@ export default function QuickActions({ onAction, disabled }) {
       confirmDescription: 'This will scan all configured drives and update the asset database. This may take several minutes depending on the number of files.'
     },
     {
-      id: 'recompute_thumbs',
-      label: 'Regenerate Thumbnails',
-      icon: Image,
-      description: 'Regenerate missing thumbnails',
-      variant: 'outline',
-      requiresConfirm: true,
-      confirmTitle: 'Regenerate Thumbnails?',
-      confirmDescription: 'This will queue jobs to regenerate thumbnails for all assets missing them. This process may use significant CPU/GPU resources.'
-    },
-    {
       id: 'clear_completed_jobs',
       label: 'Clear Completed',
       icon: CheckCircle,
@@ -80,7 +69,7 @@ export default function QuickActions({ onAction, disabled }) {
       confirmDescription: 'This will delete all temporary cache files. This is safe but may cause temporary performance reduction while caches rebuild.'
     },
     {
-      id: 'optimize_database',
+      id: 'optimize_db',
       label: 'Optimize DB',
       icon: Database,
       description: 'Vacuum and analyze database',
