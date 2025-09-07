@@ -1,10 +1,5 @@
 #!/command/with-contenv sh
-# Start NATS server if enabled
+# Start NATS server
 
-if [ "${NATS_ENABLE}" = "true" ]; then
-    echo "Starting NATS server..."
-    exec nats-server -c /opt/streamops/app/pkg/nats.conf
-else
-    echo "NATS disabled, sleeping..."
-    exec sleep infinity
-fi
+echo "Starting NATS server..."
+exec nats-server -c /opt/streamops/app/pkg/nats.conf

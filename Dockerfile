@@ -98,17 +98,15 @@ RUN chmod +x /etc/services.d/*/run /etc/cont-init.d/* 2>/dev/null || true
 COPY --from=ui-builder /build/app/ui/dist ./app/static
 
 # Create necessary directories
-RUN mkdir -p /data/db /data/logs /data/cache /data/thumbs /data/config \
+RUN mkdir -p /data/db /data/logs /data/cache /data/config \
     && mkdir -p /var/lib/streamops/nats /var/log/streamops \
     && chmod 755 /var/lib/streamops /var/log/streamops
 
 # Environment variables
 ENV PYTHONPATH=/opt/streamops \
     ROLE=all \
-    NATS_ENABLE=true \
     DB_PATH=/data/db/streamops.db \
     CACHE_DIR=/data/cache \
-    THUMBS_DIR=/data/thumbs \
     LOG_DIR=/data/logs \
     CONFIG_PATH=/data/config/config.json \
     S6_KEEP_ENV=1 \

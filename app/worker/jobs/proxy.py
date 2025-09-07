@@ -164,7 +164,13 @@ class ProxyJob(BaseJob):
         # Scale video to target resolution (but don't upscale)
         # Get original height from video stream
         original_height = video_stream.get("height", 0)
-        target_height = int(resolution)
+        
+        # Parse resolution - default to 720 if not specified or invalid
+        try:
+            target_height = int(resolution) if resolution else 720
+        except (ValueError, TypeError):
+            logger.warning(f"Invalid resolution '{resolution}', defaulting to 720")
+            target_height = 720
         
         # Don't upscale - use the smaller of target or original
         if original_height > 0 and original_height < target_height:

@@ -59,7 +59,7 @@ async def create_tables() -> None:
         logger.info("Prototype mode: Dropping existing tables for clean schema")
         tables = [
             "so_assets_fts",  # Drop FTS table first
-            "so_thumbs", "so_jobs", "so_sessions", "so_rules",
+            "so_jobs", "so_sessions", "so_rules",
             "so_overlays", "so_configs", "so_reports", "so_obs_connections",
             "so_roles", "so_drives", "so_asset_events", "so_assets"
         ]
@@ -74,22 +74,24 @@ async def create_tables() -> None:
         CREATE TABLE IF NOT EXISTS so_assets (
             id TEXT PRIMARY KEY,
             abs_path TEXT UNIQUE NOT NULL,
-            drive_hint TEXT,
-            size INTEGER,
+            dir_path TEXT,
+            filename TEXT,
+            size_bytes INTEGER,
             mtime REAL,
             ctime REAL,
-            hash_xxh64 TEXT,
-            hash_sha256 TEXT,
-            duration_sec REAL,
+            hash TEXT,
+            duration_s REAL,
             video_codec TEXT,
             audio_codec TEXT,
             width INTEGER,
             height INTEGER,
             fps REAL,
+            has_audio BOOLEAN DEFAULT 0,
             container TEXT,
             streams_json TEXT,
             tags_json TEXT,
-            status TEXT DEFAULT 'completed',
+            status TEXT DEFAULT 'ready',
+            indexed_at TIMESTAMP,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
@@ -118,13 +120,11 @@ async def create_tables() -> None:
             asset_id TEXT,
             payload_json TEXT NOT NULL,
             state TEXT DEFAULT 'queued',
-            progress REAL DEFAULT 0,
             error TEXT,
             result_json TEXT,
             started_at TIMESTAMP,
-            ended_at TIMESTAMP,
-            -- New blocking fields for QP/AH/GR support
-            deferred BOOLEAN DEFAULT 0,
+            finished_at TIMESTAMP,
+            -- Blocking fields for QP/AH/GR support
             blocked_reason TEXT,
             next_run_at TIMESTAMP,
             attempts INTEGER DEFAULT 0,
@@ -132,6 +132,17 @@ async def create_tables() -> None:
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (asset_id) REFERENCES so_assets(id)
+        )
+    """)
+    
+    # Progress tracking table (separate from jobs)
+    await _db.execute("""
+        CREATE TABLE IF NOT EXISTS so_progress (
+            job_id TEXT PRIMARY KEY,
+            progress REAL DEFAULT 0,
+            message TEXT,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (job_id) REFERENCES so_jobs(id) ON DELETE CASCADE
         )
     """)
     
@@ -159,7 +170,7 @@ async def create_tables() -> None:
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
             description TEXT,
-            enabled BOOLEAN DEFAULT 1,
+            is_active BOOLEAN DEFAULT 1,
             priority INTEGER DEFAULT 50,
             -- Legacy columns for compatibility
             when_json TEXT,
@@ -178,19 +189,6 @@ async def create_tables() -> None:
             last_error TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    
-    # Thumbnails table
-    await _db.execute("""
-        CREATE TABLE IF NOT EXISTS so_thumbs (
-            asset_id TEXT PRIMARY KEY,
-            poster_path TEXT,
-            sprite_path TEXT,
-            hover_mp4_path TEXT,
-            waveform_json TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (asset_id) REFERENCES so_assets(id)
         )
     """)
     
@@ -281,14 +279,14 @@ async def create_tables() -> None:
     
     # Create indexes
     await _db.execute("CREATE INDEX IF NOT EXISTS idx_assets_path ON so_assets(abs_path)")
-    await _db.execute("CREATE INDEX IF NOT EXISTS idx_assets_status ON so_assets(status)")
+    # Removed status index - column doesn't exist
     await _db.execute("CREATE INDEX IF NOT EXISTS idx_assets_created ON so_assets(created_at)")
     await _db.execute("CREATE INDEX IF NOT EXISTS idx_jobs_state ON so_jobs(state)")
     await _db.execute("CREATE INDEX IF NOT EXISTS idx_jobs_type ON so_jobs(type)")
     await _db.execute("CREATE INDEX IF NOT EXISTS idx_jobs_asset ON so_jobs(asset_id)")
-    await _db.execute("CREATE INDEX IF NOT EXISTS idx_jobs_deferred_next_run ON so_jobs(deferred, next_run_at)")
+    await _db.execute("CREATE INDEX IF NOT EXISTS idx_jobs_state_next_run ON so_jobs(state, next_run_at)")
     await _db.execute("CREATE INDEX IF NOT EXISTS idx_jobs_blocked ON so_jobs(blocked_reason)")
-    await _db.execute("CREATE INDEX IF NOT EXISTS idx_rules_enabled ON so_rules(enabled)")
+    await _db.execute("CREATE INDEX IF NOT EXISTS idx_rules_active ON so_rules(is_active)")
     await _db.execute("CREATE INDEX IF NOT EXISTS idx_rules_priority ON so_rules(priority)")
     await _db.execute("CREATE INDEX IF NOT EXISTS idx_obs_enabled ON so_obs_connections(enabled)")
     

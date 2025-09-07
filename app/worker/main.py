@@ -8,7 +8,6 @@ from datetime import datetime
 from app.api.services.nats_service import NATSService
 from app.api.db.database import init_db, close_db
 from app.worker.jobs.remux import RemuxJob
-from app.worker.jobs.thumbnail import ThumbnailJob
 from app.worker.jobs.proxy import ProxyJob
 from app.worker.jobs.transcode import TranscodeJob
 from app.worker.jobs.index import IndexJob
@@ -28,7 +27,6 @@ class Worker:
         self.watchers = []
         self.job_handlers = {
             "remux": RemuxJob(),
-            "thumbnail": ThumbnailJob(),
             "proxy": ProxyJob(),
             "transcode": TranscodeJob(),
             "index": IndexJob(),
@@ -42,12 +40,11 @@ class Worker:
         await init_db()
         
         # Connect to NATS
-        if os.getenv("NATS_ENABLE", "true").lower() == "true":
-            self.nats = NATSService()
-            await self.nats.connect()
-            
-            # Subscribe to job queues
-            await self._subscribe_to_jobs()
+        self.nats = NATSService()
+        await self.nats.connect()
+        
+        # Subscribe to job queues
+        await self._subscribe_to_jobs()
         
         # Start drive watchers
         await self._start_watchers()
@@ -194,11 +191,11 @@ class Worker:
                     (status, job_id)
                 )
             elif status in ["completed", "failed"]:
-                # Set ended_at when job finishes
+                # Set finished_at when job finishes
                 await db.execute(
                     """
                     UPDATE so_jobs 
-                    SET state = ?, error = ?, ended_at = datetime('now'), updated_at = datetime('now')
+                    SET state = ?, error = ?, finished_at = datetime('now'), updated_at = datetime('now')
                     WHERE id = ?
                     """,
                     (status, result if status == "failed" else None, job_id)

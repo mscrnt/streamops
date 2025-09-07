@@ -34,7 +34,6 @@ services:
       
     environment:
       - ROLE=all
-      - NATS_ENABLE=true
       - LOG_LEVEL=info
       - TZ=America/Los_Angeles
       

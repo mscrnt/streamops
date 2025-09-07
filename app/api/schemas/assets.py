@@ -83,9 +83,3 @@ class AssetSearchQuery(BaseModel):
     created_before: Optional[datetime] = Field(None, description="Created before timestamp")
 
 
-class AssetThumbnailResponse(BaseModel):
-    """Asset thumbnail response"""
-    poster_url: Optional[str] = Field(None, description="Poster image URL")
-    sprite_url: Optional[str] = Field(None, description="Sprite sheet URL")
-    hover_url: Optional[str] = Field(None, description="Hover preview URL")
-    generated_at: Optional[datetime] = Field(None, description="When thumbnails were generated")

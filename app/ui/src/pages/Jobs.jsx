@@ -280,7 +280,7 @@ export default function Jobs() {
   // Get status badge
   const getStatusBadge = (job) => {
     // Handle both direct status string and job object
-    const status = typeof job === 'string' ? job : (job.deferred ? 'deferred' : (job.state || job.status))
+    const status = typeof job === 'string' ? job : (job.state || job.status)
     
     const variants = {
       queued: { variant: 'warning', icon: Clock },
@@ -296,9 +296,14 @@ export default function Jobs() {
     const Icon = config.icon
     
     // For deferred jobs, show blocking reason tooltip
-    const title = typeof job === 'object' && job.deferred && job.blocked_reason ? 
+    const title = typeof job === 'object' && status === 'deferred' && job.blocked_reason ? 
       `Deferred: ${job.blocked_reason.replace(/_/g, ' ').replace(':', ': ')}` : 
       undefined
+    
+    // For deferred jobs with countdown, create a badge with countdown
+    if (status === 'deferred' && typeof job === 'object' && job.next_run_at) {
+      return <DeferredBadge job={job} config={config} Icon={Icon} title={title} />
+    }
     
     return (
       <Badge 
@@ -308,6 +313,40 @@ export default function Jobs() {
       >
         <Icon className={cn("w-4 h-4 mr-1.5", config.animate && "animate-spin")} />
         {status}
+      </Badge>
+    )
+  }
+  
+  // Deferred badge with countdown
+  const DeferredBadge = ({ job, config, Icon, title }) => {
+    const [timeLeft, setTimeLeft] = useState('')
+    
+    useEffect(() => {
+      const updateCountdown = () => {
+        const formatted = formatNextRun(job.next_run_at)
+        setTimeLeft(formatted || '')
+      }
+      
+      // Update immediately
+      updateCountdown()
+      
+      // Update every second
+      const interval = setInterval(updateCountdown, 1000)
+      
+      return () => clearInterval(interval)
+    }, [job.next_run_at])
+    
+    return (
+      <Badge 
+        variant={config.variant} 
+        className="capitalize font-semibold text-xs px-2.5 py-1"
+        title={title}
+      >
+        <Icon className="w-4 h-4 mr-1.5" />
+        <span>deferred</span>
+        {timeLeft && (
+          <span className="ml-1 font-normal opacity-90">({timeLeft})</span>
+        )}
       </Badge>
     )
   }
@@ -324,6 +363,34 @@ export default function Jobs() {
     if (diffMs < 3600000) return `${Math.ceil(diffMs / 60000)}m`
     if (diffMs < 86400000) return `${Math.ceil(diffMs / 3600000)}h`
     return formatRelativeTime(nextRunAt)
+  }
+  
+  // Countdown component for deferred jobs
+  const DeferredCountdown = ({ nextRunAt }) => {
+    const [timeLeft, setTimeLeft] = useState('')
+    
+    useEffect(() => {
+      const updateCountdown = () => {
+        const formatted = formatNextRun(nextRunAt)
+        setTimeLeft(formatted || '')
+      }
+      
+      // Update immediately
+      updateCountdown()
+      
+      // Update every second
+      const interval = setInterval(updateCountdown, 1000)
+      
+      return () => clearInterval(interval)
+    }, [nextRunAt])
+    
+    if (!timeLeft) return null
+    
+    return (
+      <span className="text-xs text-muted-foreground">
+        in {timeLeft}
+      </span>
+    )
   }
   
   // Get job type label
@@ -734,11 +801,6 @@ export default function Jobs() {
                       <td className="p-3">
                         <div className="flex items-center gap-2">
                           {getStatusBadge(job)}
-                          {job.deferred && job.next_run_at && (
-                            <span className="text-xs text-muted-foreground">
-                              in {formatNextRun(job.next_run_at)}
-                            </span>
-                          )}
                         </div>
                       </td>
                       <td className="p-3">

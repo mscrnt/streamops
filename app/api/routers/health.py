@@ -49,18 +49,15 @@ async def readiness_check() -> Dict[str, Any]:
     except Exception:
         pass
     
-    # Check NATS (if enabled)
-    if os.getenv("NATS_ENABLE", "true").lower() == "true":
-        try:
-            from app.api.main import app
-            if hasattr(app.state, 'nats') and app.state.nats.is_connected:
-                checks["nats"] = True
-            else:
-                checks["nats"] = False
-        except Exception:
+    # Check NATS
+    try:
+        from app.api.main import app
+        if hasattr(app.state, 'nats') and app.state.nats.is_connected:
+            checks["nats"] = True
+        else:
             checks["nats"] = False
-    else:
-        checks["nats"] = None  # Not applicable
+    except Exception:
+        checks["nats"] = False
     
     all_ready = all(v for v in checks.values() if v is not None)
     

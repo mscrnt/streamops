@@ -28,7 +28,6 @@ class JobType(str):
     ffmpeg_remux = "ffmpeg_remux"
     ffmpeg_transcode = "ffmpeg_transcode"
     proxy = "proxy"
-    thumbnail = "thumbnail"
     index = "index"
     move = "move"
     copy = "copy"
@@ -45,7 +44,7 @@ class JobItem(BaseModel):
     eta_sec: Optional[int] = None
     created_at: str
     started_at: Optional[str] = None
-    ended_at: Optional[str] = None
+    finished_at: Optional[str] = None
     updated_at: Optional[str] = None
     duration_sec: Optional[float] = None
     error: Optional[str] = None
@@ -141,7 +140,7 @@ async def list_jobs(
         # Apply filters
         if status and status != "all":
             if status == "deferred":
-                query += " AND j.deferred = 1"
+                query += " AND j.state = 'deferred'"
             else:
                 query += " AND j.state = ?"
                 params.append(status)
@@ -189,10 +188,10 @@ async def list_jobs(
             
             # Calculate duration if both timestamps exist
             duration_sec = None
-            if row_dict.get('started_at') and row_dict.get('ended_at'):
+            if row_dict.get('started_at') and row_dict.get('finished_at'):
                 try:
                     started = datetime.fromisoformat(row_dict['started_at'])
-                    ended = datetime.fromisoformat(row_dict['ended_at'])
+                    ended = datetime.fromisoformat(row_dict['finished_at'])
                     duration_sec = (ended - started).total_seconds()
                 except:
                     pass
@@ -211,20 +210,23 @@ async def list_jobs(
                     return timestamp_str + 'Z'
                 return timestamp_str
             
+            # Check if job is deferred based on state
+            is_deferred = row_dict.get('state') == 'deferred'
+            
             items.append(JobItem(
                 id=row_dict.get('id', ''),
                 type=row_dict.get('type', ''),
                 asset_id=row_dict.get('asset_id'),
                 asset_name=os.path.basename(row_dict.get('asset_name', '')) if row_dict.get('asset_name') else None,
-                state='deferred' if row_dict.get('deferred') else row_dict.get('state', row_dict.get('status', 'unknown')),
+                state=row_dict.get('state', row_dict.get('status', 'unknown')),
                 progress=progress * 100 if progress <= 1 else progress,
                 eta_sec=eta_sec,
                 created_at=ensure_utc_timestamp(row_dict.get('created_at')) or datetime.utcnow().isoformat() + 'Z',
                 started_at=ensure_utc_timestamp(row_dict.get('started_at')),
-                ended_at=ensure_utc_timestamp(row_dict.get('ended_at')),
+                finished_at=ensure_utc_timestamp(row_dict.get('finished_at')),
                 duration_sec=duration_sec,
                 error=row_dict.get('error'),
-                deferred=bool(row_dict.get('deferred', False)),
+                deferred=is_deferred,
                 blocked_reason=row_dict.get('blocked_reason'),
                 next_run_at=ensure_utc_timestamp(row_dict.get('next_run_at')),
                 attempts=row_dict.get('attempts', 0)
@@ -261,8 +263,8 @@ async def get_job_summary(
         cursor = await db.execute("""
             SELECT 
                 SUM(CASE WHEN state = 'running' THEN 1 ELSE 0 END) as running,
-                SUM(CASE WHEN (state = 'queued' OR state = 'pending') AND deferred = 0 THEN 1 ELSE 0 END) as queued,
-                SUM(CASE WHEN deferred = 1 THEN 1 ELSE 0 END) as deferred,
+                SUM(CASE WHEN state IN ('queued', 'pending') THEN 1 ELSE 0 END) as queued,
+                SUM(CASE WHEN state = 'deferred' THEN 1 ELSE 0 END) as deferred,
                 SUM(CASE WHEN state = 'completed' AND updated_at >= ? THEN 1 ELSE 0 END) as completed_24h,
                 SUM(CASE WHEN state = 'failed' AND updated_at >= ? THEN 1 ELSE 0 END) as failed_24h
             FROM so_jobs
@@ -308,7 +310,7 @@ async def get_job_stats(
                 SUM(CASE WHEN state = 'running' THEN 1 ELSE 0 END) as running,
                 SUM(CASE WHEN state IN ('queued', 'pending') THEN 1 ELSE 0 END) as queued,
                 AVG(CASE WHEN state = 'completed' 
-                    THEN CAST((julianday(ended_at) - julianday(started_at)) * 86400 AS REAL)
+                    THEN CAST((julianday(finished_at) - julianday(started_at)) * 86400 AS REAL)
                     ELSE NULL END) as avg_duration
             FROM so_jobs
             WHERE created_at >= ?
@@ -340,7 +342,7 @@ async def get_active_jobs(
             FROM so_jobs j
             LEFT JOIN so_assets a ON j.asset_id = a.id
             WHERE j.state IN ('running', 'queued', 'pending')
-               OR (j.deferred = 1 AND j.next_run_at <= datetime('now'))
+               OR (j.state = 'deferred' AND j.next_run_at <= datetime('now'))
             ORDER BY 
                 CASE WHEN j.state = 'running' THEN 1
                      WHEN j.state = 'pending' THEN 2
@@ -423,7 +425,7 @@ async def get_job_details(
             "error": row_dict.get('error'),
             "created_at": row_dict.get('created_at'),
             "started_at": row_dict.get('started_at'),
-            "ended_at": row_dict.get('ended_at'),
+            "finished_at": row_dict.get('finished_at'),
             "updated_at": row_dict.get('updated_at')
         }
         
@@ -479,7 +481,7 @@ async def cancel_job(
         await db.execute("""
             UPDATE so_jobs 
             SET state = 'canceled', 
-                ended_at = datetime('now'),
+                finished_at = datetime('now'),
                 updated_at = datetime('now')
             WHERE id = ?
         """, (job_id,))
@@ -490,7 +492,7 @@ async def cancel_job(
             "type": "job_state",
             "id": job_id,
             "status": "canceled",
-            "ended_at": datetime.utcnow().isoformat()
+            "finished_at": datetime.utcnow().isoformat()
         })
         
         # TODO: Send actual cancel signal to worker via NATS
@@ -640,7 +642,7 @@ async def bulk_job_action(
                 if row and row[0] in ['queued', 'pending', 'running']:
                     await db.execute("""
                         UPDATE so_jobs 
-                        SET state = 'canceled', ended_at = datetime('now'), updated_at = datetime('now')
+                        SET state = 'canceled', finished_at = datetime('now'), updated_at = datetime('now')
                         WHERE id = ?
                     """, (job_id,))
                     results.append({"id": job_id, "ok": True})
@@ -821,7 +823,7 @@ async def get_active_jobs(
                 eta_sec=eta_sec,
                 created_at=row_dict.get('created_at', datetime.utcnow().isoformat()),
                 started_at=row_dict.get('started_at'),
-                ended_at=row_dict.get('ended_at'),
+                finished_at=row_dict.get('finished_at'),
                 duration_sec=None,
                 error=row_dict.get('error')
             ))

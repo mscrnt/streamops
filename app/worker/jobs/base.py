@@ -27,17 +27,23 @@ class BaseJob(ABC):
         
         try:
             db = await get_db()
-            query = "UPDATE so_jobs SET progress = ?, updated_at = CURRENT_TIMESTAMP"
-            params = [progress]
             
+            # Update progress in so_progress table
+            await db.execute("""
+                INSERT INTO so_progress (job_id, progress, updated_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(job_id) DO UPDATE SET
+                    progress = excluded.progress,
+                    updated_at = CURRENT_TIMESTAMP
+            """, (job_id, progress))
+            
+            # Update job status if provided
             if status:
-                query += ", state = ?"
-                params.append(status)
+                await db.execute(
+                    "UPDATE so_jobs SET state = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (status, job_id)
+                )
             
-            query += " WHERE id = ?"
-            params.append(job_id)
-            
-            await db.execute(query, params)
             await db.commit()
             
         except Exception as e:

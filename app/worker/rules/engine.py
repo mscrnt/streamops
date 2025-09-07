@@ -10,7 +10,7 @@ import asyncio
 import aiosqlite
 from typing import Dict, Any, List, Optional
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from fnmatch import fnmatch
 
 from .models import Artifact, RuleContext, ActionResult
@@ -43,7 +43,7 @@ class RulesEngine:
                 SELECT id, name, priority, trigger_json, conditions_json, 
                        actions_json, guardrails_json, quiet_period_sec
                 FROM so_rules 
-                WHERE enabled = 1 
+                WHERE is_active = 1 
                 ORDER BY priority DESC, created_at ASC
             """)
             
@@ -120,7 +120,7 @@ class RulesEngine:
                 logger.error(f"Error evaluating rule '{rule.name}': {e}")
     
     async def execute_rule(self, rule: 'Rule', event_data: Dict[str, Any]):
-        """Queue a rule for execution after quiet period"""
+        """Execute a rule either immediately or after quiet period"""
         # Generate run ID for tracing and deduplication
         run_id = f"{rule.id}:{event_data.get('asset_id', '')}:{event_data.get('event_id', '')}"
         file_path = event_data.get('path', '')
@@ -131,14 +131,24 @@ class RulesEngine:
             logger.info(f"[{run_id}] Rule already pending for {file_path}, skipping duplicate")
             return
         
-        # Mark as pending and add to queue
-        self.pending_executions[execution_key] = True
-        self.execution_queue.append((rule, event_data, execution_key))
-        logger.info(f"[{run_id}] Queued rule '{rule.name}' for {file_path} (queue size: {len(self.execution_queue)})")
-        
-        # Start or restart the quiet period manager if not already running
-        if self.quiet_period_task is None or self.quiet_period_task.done():
-            self.quiet_period_task = asyncio.create_task(self._manage_quiet_period())
+        # If there's a quiet period, queue it and create deferred jobs
+        if rule.quiet_period_sec > 0:
+            # Mark as pending and add to queue
+            self.pending_executions[execution_key] = True
+            self.execution_queue.append((rule, event_data, execution_key))
+            logger.info(f"[{run_id}] Queued rule '{rule.name}' for {file_path} with {rule.quiet_period_sec}s quiet period (queue size: {len(self.execution_queue)})")
+            
+            # Create deferred jobs immediately so they're visible in UI
+            logger.info(f"Creating deferred jobs for rule {rule.name}")
+            await self._create_deferred_jobs_for_rule(rule, event_data)
+            
+            # Start or restart the quiet period manager if not already running
+            if self.quiet_period_task is None or self.quiet_period_task.done():
+                self.quiet_period_task = asyncio.create_task(self._manage_quiet_period())
+        else:
+            # No quiet period - execute immediately
+            logger.info(f"[{run_id}] No quiet period for rule '{rule.name}', executing immediately")
+            await self._execute_rule_actions(rule, event_data)
     
     async def _manage_quiet_period(self):
         """Manage the quiet period and batch process all queued rules"""
@@ -183,9 +193,16 @@ class RulesEngine:
                     if quiet_elapsed % 10 == 0:
                         logger.debug(f"Quiet period: {quiet_elapsed}/{max_quiet_period}s (queue: {len(self.execution_queue)} items)")
                 else:
-                    # Quiet period completed - process all queued items
-                    logger.info(f"Quiet period completed, processing {len(self.execution_queue)} queued rules")
-                    await self._process_execution_queue()
+                    # Quiet period completed - activate deferred jobs and clear queue
+                    logger.info(f"Quiet period completed, activating deferred jobs for {len(self.execution_queue)} queued rules")
+                    activated_count = await self._activate_deferred_jobs()
+                    logger.info(f"Activated {activated_count} deferred jobs after quiet period")
+                    
+                    # Clear the execution queue since jobs were already created as deferred
+                    queue_copy = self.execution_queue.copy()
+                    self.execution_queue.clear()
+                    for _, _, execution_key in queue_copy:
+                        self.pending_executions.pop(execution_key, None)
                     return
             else:
                 # No quiet period needed, process immediately
@@ -197,46 +214,53 @@ class RulesEngine:
         self.execution_queue.clear()
         self.pending_executions.clear()
     
+    async def _execute_rule_actions(self, rule: 'Rule', event_data: Dict[str, Any]):
+        """Execute a rule's actions immediately (no quiet period)"""
+        run_id = f"{rule.id}:{event_data.get('asset_id', '')}:{event_data.get('event_id', '')}"
+        
+        try:
+            logger.info(f"[{run_id}] Executing rule '{rule.name}'")
+            
+            # Initialize context with active artifact
+            initial_path = Path(event_data.get("path", ""))
+            if not initial_path.exists():
+                logger.warning(f"[{run_id}] Initial path does not exist: {initial_path}")
+                return
+                
+            initial_artifact = Artifact(path=initial_path)
+            ctx = RuleContext(
+                original=initial_artifact,
+                active=initial_artifact,
+                vars=event_data.copy()
+            )
+            
+            # Execute actions strictly in sequence
+            for idx, action in enumerate(rule.do_actions):
+                action_type = action.get("type")
+                logger.info(f"[{run_id}] Step {idx+1}/{len(rule.do_actions)}: {action_type} on {ctx.active.path}")
+                
+                try:
+                    result = await self.execute_action(action, ctx)
+                    
+                    if result and result.updated_vars:
+                        ctx.vars.update(result.updated_vars)
+                        
+                    logger.info(f"[{run_id}] Step {idx+1} completed: {action_type}")
+                        
+                except Exception as e:
+                    logger.error(f"[{run_id}] Step {idx+1} failed: {action_type} - {e}", exc_info=True)
+                    break
+        except Exception as e:
+            logger.error(f"[{run_id}] Rule execution failed: {e}", exc_info=True)
+    
     async def _process_execution_queue(self):
         """Process all queued rule executions sequentially"""
         queue_copy = self.execution_queue.copy()
         self.execution_queue.clear()
         
         for rule, event_data, execution_key in queue_copy:
-            run_id = f"{rule.id}:{event_data.get('asset_id', '')}:{event_data.get('event_id', '')}"
-            
             try:
-                logger.info(f"[{run_id}] Executing rule '{rule.name}'")
-                
-                # Initialize context with active artifact
-                initial_path = Path(event_data.get("path", ""))
-                if not initial_path.exists():
-                    logger.warning(f"[{run_id}] Initial path does not exist: {initial_path}")
-                    continue
-                    
-                initial_artifact = Artifact(path=initial_path)
-                ctx = RuleContext(
-                    original=initial_artifact,
-                    active=initial_artifact,
-                    vars=event_data.copy()
-                )
-                
-                # Execute actions strictly in sequence
-                for idx, action in enumerate(rule.do_actions):
-                    action_type = action.get("type")
-                    logger.info(f"[{run_id}] Step {idx+1}/{len(rule.do_actions)}: {action_type} on {ctx.active.path}")
-                    
-                    try:
-                        result = await self.execute_action(action, ctx)
-                        
-                        if result and result.updated_vars:
-                            ctx.vars.update(result.updated_vars)
-                            
-                        logger.info(f"[{run_id}] Step {idx+1} completed: {action_type}")
-                            
-                    except Exception as e:
-                        logger.error(f"[{run_id}] Step {idx+1} failed: {action_type} - {e}", exc_info=True)
-                        break
+                await self._execute_rule_actions(rule, event_data)
             finally:
                 # Remove from pending executions
                 self.pending_executions.pop(execution_key, None)
@@ -328,7 +352,6 @@ class RulesEngine:
             "index_asset": self._action_index,
             "proxy": self._action_proxy,
             "make_proxies_if": self._action_proxy,
-            "thumbs": self._action_thumbnail,
             "transcode_preset": self._action_transcode,
             "tag": self._action_tag,
         }
@@ -482,8 +505,28 @@ class RulesEngine:
                 # Try to get duration from asset data if available
                 duration = ctx.vars.get("duration_sec", 0)
             
+            # If we still don't have duration, try to get from database
+            if duration == 0:
+                asset_id = ctx.vars.get("asset_id", "")
+                if asset_id:
+                    conn = await aiosqlite.connect("/data/db/streamops.db")
+                    cursor = await conn.execute(
+                        "SELECT duration_s FROM so_assets WHERE id = ?",
+                        (asset_id,)
+                    )
+                    row = await cursor.fetchone()
+                    if row:
+                        duration = row[0] or 0
+                    await conn.close()
+            
+            # Skip if duration is known and less than threshold
             if duration > 0 and duration <= min_duration_sec:
                 logger.info(f"Skipping proxy - duration {duration}s <= {min_duration_sec}s")
+                return ActionResult(success=True)
+            
+            # Also skip if we couldn't determine duration at all (safety check)
+            if duration == 0:
+                logger.warning(f"Could not determine duration for proxy check, skipping proxy creation")
                 return ActionResult(success=True)
         
         # Check extension conditions
@@ -543,18 +586,6 @@ class RulesEngine:
         
         return ActionResult(success=True)
     
-    async def _action_thumbnail(self, params: Dict[str, Any], ctx: RuleContext) -> ActionResult:
-        """Generate thumbnails"""
-        if self.nats:
-            job_id = self._generate_job_id("thumbnail")
-            await self.nats.publish_job("thumbnail", {
-                "id": job_id,
-                "input_path": str(ctx.active.path),
-                "asset_id": ctx.vars.get("asset_id", "")
-            })
-            logger.info(f"Queued thumbnail job {job_id}")
-        return ActionResult(success=True)
-    
     async def _action_transcode(self, params: Dict[str, Any], ctx: RuleContext) -> ActionResult:
         """Transcode with preset"""
         if self.nats:
@@ -604,22 +635,161 @@ class RulesEngine:
     
     # Helper methods
     
-    async def _enqueue_job(self, job_id: str, job_type: str, asset_id: str, payload: Dict[str, Any]):
-        """Enqueue job in database"""
+    async def _enqueue_job(self, job_id: str, job_type: str, asset_id: str, payload: Dict[str, Any], 
+                          deferred: bool = False, blocked_reason: str = None):
+        """Enqueue job in database, optionally as deferred"""
         conn = await aiosqlite.connect("/data/db/streamops.db")
+        
+        # Determine initial state and next_run_at
+        if deferred:
+            state = 'deferred'
+            # Set next_run_at based on quiet period from payload
+            quiet_period = payload.get('quiet_period_sec', 45)
+            next_run_at = (datetime.utcnow() + timedelta(seconds=quiet_period)).isoformat()
+        else:
+            state = 'queued'
+            next_run_at = None
+        
         await conn.execute("""
-            INSERT INTO so_jobs (id, type, asset_id, payload_json, state, created_at, updated_at)
-            VALUES (?, ?, ?, ?, 'queued', ?, ?)
+            INSERT INTO so_jobs (id, type, asset_id, payload_json, state, 
+                               blocked_reason, next_run_at, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             job_id,
             job_type,
             asset_id,
             json.dumps(payload),
+            state,
+            blocked_reason,
+            next_run_at,
             datetime.utcnow().isoformat(),
             datetime.utcnow().isoformat()
         ))
         await conn.commit()
         await conn.close()
+    
+    async def _create_deferred_jobs_for_rule(self, rule: 'Rule', event_data: Dict[str, Any]):
+        """Create deferred jobs in database for a rule's actions"""
+        logger.info(f"Starting _create_deferred_jobs_for_rule for rule {rule.name}")
+        asset_id = event_data.get('asset_id', '')
+        
+        # Get asset duration for proxy condition checking
+        duration_sec = event_data.get('duration_sec', 0)
+        logger.info(f"Asset ID: {asset_id}, Duration from event: {duration_sec}s")
+        if duration_sec == 0 and asset_id:
+            # Try to get duration from database
+            conn = await aiosqlite.connect("/data/db/streamops.db")
+            cursor = await conn.execute(
+                "SELECT duration_s FROM so_assets WHERE id = ?",
+                (asset_id,)
+            )
+            row = await cursor.fetchone()
+            if row:
+                duration_sec = row[0] or 0
+            await conn.close()
+        
+        # Create a deferred job for each action in the rule
+        logger.info(f"Processing {len(rule.do_actions)} actions for deferred job creation")
+        jobs_created = 0
+        for action in rule.do_actions:
+            action_type = action.get("type")
+            params = action.get("params", {})
+            logger.info(f"Processing action: {action_type}")
+            
+            # Skip non-job actions
+            if action_type not in ['ffmpeg_remux', 'proxy', 'transcode_preset']:
+                logger.info(f"Skipping non-job action: {action_type}")
+                continue
+            
+            # Check proxy duration condition
+            if action_type == 'proxy':
+                if_duration_gt = params.get('if_duration_gt', 0)
+                min_duration_sec = params.get('min_duration_sec', if_duration_gt)
+                if min_duration_sec > 0:
+                    # Duration check - if we don't know duration or it's too short, skip
+                    if duration_sec <= 0:
+                        logger.info(f"Skipping proxy job creation - duration unknown or 0")
+                        continue
+                    elif duration_sec <= min_duration_sec:
+                        logger.info(f"Skipping proxy job creation - duration {duration_sec}s <= {min_duration_sec}s")
+                        continue
+            
+            # Map action type to job type
+            job_type_map = {
+                'ffmpeg_remux': 'remux',
+                'proxy': 'proxy', 
+                'transcode_preset': 'transcode'
+            }
+            job_type = job_type_map.get(action_type, action_type)
+            
+            # Create the deferred job
+            job_id = self._generate_job_id(job_type)
+            payload = params.copy()
+            payload['input_path'] = event_data.get('path', '')
+            payload['quiet_period_sec'] = rule.quiet_period_sec
+            payload['duration_sec'] = duration_sec  # Pass duration to job
+            
+            # Add extra params for remux
+            if action_type == 'ffmpeg_remux':
+                payload['output_format'] = params.get('container', 'mov')
+                payload['faststart'] = params.get('faststart', True)
+            
+            # Create deferred job with next_run_at set
+            await self._enqueue_job(
+                job_id, 
+                job_type,  # Use mapped job type
+                asset_id, 
+                payload,
+                deferred=True,
+                blocked_reason=f"Waiting for {rule.quiet_period_sec}s quiet period"
+            )
+            jobs_created += 1
+            logger.info(f"Created deferred job {job_id} for {action_type} (job type: {job_type}), will run after quiet period")
+        
+        logger.info(f"Created {jobs_created} deferred jobs for rule {rule.name}")
+    
+    async def _activate_deferred_jobs(self):
+        """Activate all deferred jobs that are ready to run"""
+        conn = await aiosqlite.connect("/data/db/streamops.db")
+        conn.row_factory = aiosqlite.Row
+        
+        # Get all deferred jobs that are ready
+        cursor = await conn.execute("""
+            SELECT id, type, asset_id, payload_json
+            FROM so_jobs 
+            WHERE state = 'deferred' 
+            AND (next_run_at IS NULL OR next_run_at <= ?)
+        """, (datetime.utcnow().isoformat(),))
+        
+        jobs = await cursor.fetchall()
+        
+        # Update all deferred jobs to queued state
+        await conn.execute("""
+            UPDATE so_jobs 
+            SET state = 'queued', 
+                blocked_reason = NULL,
+                updated_at = ?
+            WHERE state = 'deferred' 
+            AND (next_run_at IS NULL OR next_run_at <= ?)
+        """, (
+            datetime.utcnow().isoformat(),
+            datetime.utcnow().isoformat()
+        ))
+        
+        await conn.commit()
+        await conn.close()
+        
+        # Publish each job to NATS for processing
+        if self.nats and jobs:
+            for job in jobs:
+                payload = json.loads(job['payload_json']) if job['payload_json'] else {}
+                payload['id'] = job['id']
+                payload['asset_id'] = job['asset_id']
+                
+                await self.nats.publish_job(job['type'], payload)
+                logger.info(f"Published deferred job {job['id']} of type {job['type']} to NATS")
+        
+        return len(jobs)
     
     async def _await_job_completion(self, job_id: str, timeout: int = 600) -> Dict[str, Any]:
         """Await job completion by polling database"""

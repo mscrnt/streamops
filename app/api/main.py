@@ -58,13 +58,12 @@ async def lifespan(app: FastAPI):
         logger.info("No GPU detected, using CPU for all processing")
     logger.info("GPU service initialized")
     
-    # Initialize NATS if enabled
-    if os.getenv("NATS_ENABLE", "true").lower() == "true":
-        logger.info("Initializing NATS...")
-        nats_service = NATSService()
-        await nats_service.connect()
-        app.state.nats = nats_service
-        logger.info("NATS initialized")
+    # Initialize NATS
+    logger.info("Initializing NATS...")
+    nats_service = NATSService()
+    await nats_service.connect()
+    app.state.nats = nats_service
+    logger.info("NATS initialized")
     
     # Seed OBS connections from environment if needed
     logger.info("Checking for OBS environment configuration...")

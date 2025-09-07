@@ -90,7 +90,7 @@ class DeferredJobScheduler:
                 SELECT id, type, asset_id, payload_json, blocked_reason, 
                        attempts, next_run_at
                 FROM so_jobs 
-                WHERE deferred = 1 
+                WHERE state = 'deferred' 
                   AND (next_run_at IS NULL OR next_run_at <= ?)
                 ORDER BY next_run_at ASC, created_at ASC
                 LIMIT 10
@@ -222,10 +222,9 @@ class DeferredJobScheduler:
             # Update job to no longer be deferred
             await db.execute("""
                 UPDATE so_jobs 
-                SET deferred = 0,
+                SET state = 'queued',
                     blocked_reason = NULL,
                     next_run_at = NULL,
-                    state = 'queued',
                     last_check_at = datetime('now'),
                     updated_at = datetime('now')
                 WHERE id = ?

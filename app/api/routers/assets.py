@@ -12,7 +12,7 @@ import aiosqlite
 
 from app.api.schemas.assets import (
     AssetResponse, AssetCreate, AssetUpdate, AssetListResponse,
-    AssetSearchQuery, AssetThumbnailResponse, AssetStatus, AssetType
+    AssetSearchQuery, AssetStatus, AssetType
 )
 from app.api.db.database import get_db
 
@@ -23,7 +23,6 @@ router = APIRouter()
 # Additional Pydantic models for new endpoints
 class AssetDetailResponse(BaseModel):
     asset: Dict[str, Any]
-    thumbs: Dict[str, str]
     jobs_recent: List[Dict[str, Any]]
 
 class AssetAction(BaseModel):
@@ -207,19 +206,18 @@ async def create_asset(
         )
         await db.commit()
         
-        # Queue asset processing job if NATS is enabled
-        if os.getenv("NATS_ENABLE", "true").lower() == "true":
-            try:
-                from app.api.main import app
-                if hasattr(app.state, 'nats'):
-                    await app.state.nats.publish_job('index', {
-                        'id': str(uuid.uuid4()),
-                        'asset_id': asset_id,
-                        'filepath': asset.filepath,
-                        'type': asset_type.value
-                    })
-            except Exception as e:
-                logger.warning(f"Failed to queue asset processing: {e}")
+        # Queue asset processing job
+        try:
+            from app.api.main import app
+            if hasattr(app.state, 'nats'):
+                await app.state.nats.publish_job('index', {
+                    'id': str(uuid.uuid4()),
+                    'asset_id': asset_id,
+                    'filepath': asset.filepath,
+                    'type': asset_type.value
+                })
+        except Exception as e:
+            logger.warning(f"Failed to queue asset processing: {e}")
         
         # Add background task for initial processing
         background_tasks.add_task(_process_asset, asset_id, asset.filepath)
@@ -410,21 +408,13 @@ async def get_asset_stats(
         )
         total_size = (await cursor.fetchone())[0] or 0
         
-        # Get assets with thumbnails
-        cursor = await db.execute(
-            "SELECT COUNT(*) FROM so_thumbs WHERE asset_id IN (SELECT id FROM so_assets WHERE created_at >= ?)",
-            (time_offset.isoformat(),)
-        )
-        with_thumbnails = (await cursor.fetchone())[0]
         
         return {
             "time_range": time_range,
             "total_assets": total_assets,
             "total_size_bytes": total_size,
             "total_size_gb": round(total_size / (1024**3), 2) if total_size else 0,
-            "type_breakdown": type_counts,
-            "with_thumbnails": with_thumbnails,
-            "thumbnail_percentage": round((with_thumbnails / total_assets * 100) if total_assets > 0 else 0, 2)
+            "type_breakdown": type_counts
         }
     except Exception as e:
         logger.error(f"Failed to get asset stats: {str(e)}", exc_info=True)
@@ -756,21 +746,12 @@ async def delete_asset(
         
         # Delete from database
         await db.execute("DELETE FROM so_assets WHERE id = ?", (asset_id,))
-        
-        # Also delete related thumbnails
-        await db.execute("DELETE FROM so_thumbs WHERE asset_id = ?", (asset_id,))
-        
         await db.commit()
         
         # Optionally delete physical files
         if delete_files and filepath and os.path.exists(filepath):
             try:
                 os.remove(filepath)
-                # Also try to delete thumbnail files
-                thumb_dir = f"/data/thumbs/{asset_id}"
-                if os.path.exists(thumb_dir):
-                    import shutil
-                    shutil.rmtree(thumb_dir)
             except Exception as e:
                 logger.warning(f"Failed to delete physical files for asset {asset_id}: {e}")
         
@@ -779,119 +760,6 @@ async def delete_asset(
         raise HTTPException(status_code=500, detail=f"Failed to delete asset: {str(e)}")
 
 
-@router.get("/{asset_id}/thumbnails", response_model=AssetThumbnailResponse)
-async def get_asset_thumbnails(asset_id: str, db=Depends(get_db)) -> AssetThumbnailResponse:
-    """Get thumbnail URLs for an asset"""
-    try:
-        # Check if thumbnails exist in database
-        cursor = await db.execute(
-            "SELECT * FROM so_thumbs WHERE asset_id = ?",
-            (asset_id,)
-        )
-        row = await cursor.fetchone()
-        
-        if row:
-            # Thumbnails exist, return actual URLs
-            return AssetThumbnailResponse(
-                poster_url=f"/api/assets/{asset_id}/thumbnail/poster.jpg",
-                sprite_url=f"/api/assets/{asset_id}/thumbnail/sprite.jpg",
-                hover_url=f"/api/assets/{asset_id}/thumbnail/hover.mp4",
-                generated_at=datetime.fromisoformat(row[5]) if row[5] else datetime.utcnow()
-            )
-        else:
-            # Check if thumbnail files exist on disk
-            thumb_dir = f"/data/thumbs/{asset_id}"
-            poster_exists = os.path.exists(f"{thumb_dir}/poster.jpg")
-            sprite_exists = os.path.exists(f"{thumb_dir}/sprite.jpg")
-            hover_exists = os.path.exists(f"{thumb_dir}/hover.mp4")
-            
-            if poster_exists or sprite_exists or hover_exists:
-                # Files exist but not in database, add to database
-                now = datetime.utcnow()
-                await db.execute(
-                    """INSERT INTO so_thumbs (id, asset_id, poster_path, sprite_path, hover_path, created_at)
-                       VALUES (?, ?, ?, ?, ?, ?)""",
-                    (str(uuid.uuid4()), asset_id,
-                     f"{thumb_dir}/poster.jpg" if poster_exists else None,
-                     f"{thumb_dir}/sprite.jpg" if sprite_exists else None,
-                     f"{thumb_dir}/hover.mp4" if hover_exists else None,
-                     now.isoformat())
-                )
-                await db.commit()
-                
-                return AssetThumbnailResponse(
-                    poster_url=f"/api/assets/{asset_id}/thumbnail/poster.jpg" if poster_exists else None,
-                    sprite_url=f"/api/assets/{asset_id}/thumbnail/sprite.jpg" if sprite_exists else None,
-                    hover_url=f"/api/assets/{asset_id}/thumbnail/hover.mp4" if hover_exists else None,
-                    generated_at=now
-                )
-            else:
-                # No thumbnails exist
-                raise HTTPException(status_code=404, detail=f"No thumbnails found for asset {asset_id}")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch thumbnails: {str(e)}")
-
-
-@router.post("/{asset_id}/thumbnails")
-async def generate_thumbnails(
-    asset_id: str,
-    background_tasks: BackgroundTasks,
-    force_regenerate: bool = Query(False, description="Force regeneration of existing thumbnails"),
-    db=Depends(get_db)
-) -> dict:
-    """Generate thumbnails for an asset"""
-    try:
-        # Check if asset exists
-        cursor = await db.execute(
-            "SELECT abs_path FROM so_assets WHERE id = ?",
-            (asset_id,)
-        )
-        row = await cursor.fetchone()
-        
-        if not row:
-            raise HTTPException(status_code=404, detail=f"Asset {asset_id} not found")
-        
-        # Check if thumbnails already exist
-        if not force_regenerate:
-            cursor = await db.execute(
-                "SELECT id FROM so_thumbs WHERE asset_id = ?",
-                (asset_id,)
-            )
-            if await cursor.fetchone():
-                return {"message": f"Thumbnails already exist for asset {asset_id}. Use force_regenerate=true to regenerate."}
-        
-        # Queue thumbnail generation job if NATS is enabled
-        if os.getenv("NATS_ENABLE", "true").lower() == "true":
-            try:
-                from app.api.main import app
-                if hasattr(app.state, 'nats'):
-                    job_id = str(uuid.uuid4())
-                    await app.state.nats.publish_job('thumbnail', {
-                        'id': job_id,
-                        'asset_id': asset_id,
-                        'filepath': row[0],
-                        'force': force_regenerate
-                    })
-                    
-                    # Add job to database
-                    now = datetime.utcnow()
-                    await db.execute(
-                        """INSERT INTO so_jobs (id, type, state, asset_id, created_at, updated_at)
-                           VALUES (?, ?, ?, ?, ?, ?)""",
-                        (job_id, 'thumbnail', 'queued', asset_id, now.isoformat(), now.isoformat())
-                    )
-                    await db.commit()
-                    
-                    return {"message": f"Thumbnail generation job {job_id} queued for asset {asset_id}"}
-            except Exception as e:
-                logger.warning(f"Failed to queue thumbnail generation via NATS: {e}")
-        
-        # Fallback to background task
-        background_tasks.add_task(_generate_thumbnails, asset_id, row[0], force_regenerate)
-        
-        return {"message": f"Thumbnail generation queued for asset {asset_id}"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to queue thumbnail generation: {str(e)}")
 
 
 @router.post("/{asset_id}/process")
@@ -901,7 +769,7 @@ async def reprocess_asset(
     force: bool = Query(False, description="Force reprocessing even if completed"),
     db=Depends(get_db)
 ) -> dict:
-    """Reprocess an asset (metadata extraction, thumbnails, etc.)"""
+    """Reprocess an asset (metadata extraction)"""
     try:
         # Check if asset exists
         cursor = await db.execute(
@@ -917,38 +785,37 @@ async def reprocess_asset(
         if not force and row[1] == AssetStatus.ready.value:
             return {"message": f"Asset {asset_id} is already processed. Use force=true to reprocess."}
         
-        # Queue reprocessing job if NATS is enabled
-        if os.getenv("NATS_ENABLE", "true").lower() == "true":
-            try:
-                from app.api.main import app
-                if hasattr(app.state, 'nats'):
-                    job_id = str(uuid.uuid4())
-                    await app.state.nats.publish_job('index', {
-                        'id': job_id,
-                        'asset_id': asset_id,
-                        'filepath': row[0],
-                        'reprocess': True,
-                        'force': force
-                    })
-                    
-                    # Add job to database
-                    now = datetime.utcnow()
-                    await db.execute(
-                        """INSERT INTO so_jobs (id, type, state, asset_id, created_at, updated_at)
-                           VALUES (?, ?, ?, ?, ?, ?)""",
-                        (job_id, 'index', 'queued', asset_id, now.isoformat(), now.isoformat())
-                    )
-                    
-                    # Update asset status to processing
-                    await db.execute(
-                        "UPDATE so_assets SET status = ?, updated_at = ? WHERE id = ?",
-                        (AssetStatus.processing.value, now.isoformat(), asset_id)
-                    )
-                    await db.commit()
-                    
-                    return {"message": f"Reprocessing job {job_id} queued for asset {asset_id}"}
-            except Exception as e:
-                logger.warning(f"Failed to queue reprocessing via NATS: {e}")
+        # Queue reprocessing job
+        try:
+            from app.api.main import app
+            if hasattr(app.state, 'nats'):
+                job_id = str(uuid.uuid4())
+                await app.state.nats.publish_job('index', {
+                    'id': job_id,
+                    'asset_id': asset_id,
+                    'filepath': row[0],
+                    'reprocess': True,
+                    'force': force
+                })
+                
+                # Add job to database
+                now = datetime.utcnow()
+                await db.execute(
+                    """INSERT INTO so_jobs (id, type, state, asset_id, created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (job_id, 'index', 'queued', asset_id, now.isoformat(), now.isoformat())
+                )
+                
+                # Update asset status to processing
+                await db.execute(
+                    "UPDATE so_assets SET status = ?, updated_at = ? WHERE id = ?",
+                    (AssetStatus.processing.value, now.isoformat(), asset_id)
+                )
+                await db.commit()
+                
+                return {"message": f"Reprocessing job {job_id} queued for asset {asset_id}"}
+        except Exception as e:
+            logger.warning(f"Failed to queue reprocessing via NATS: {e}")
         
         # Fallback to background task
         background_tasks.add_task(_reprocess_asset, asset_id, row[0], force)
@@ -1038,32 +905,31 @@ async def create_proxy(
             if os.path.exists(row[1]):
                 return {"message": f"Proxy already exists for asset {asset_id}. Use force_regenerate=true to regenerate."}
         
-        # Queue proxy creation job if NATS is enabled
-        if os.getenv("NATS_ENABLE", "true").lower() == "true":
-            try:
-                from app.api.main import app
-                if hasattr(app.state, 'nats'):
-                    job_id = str(uuid.uuid4())
-                    await app.state.nats.publish_job('proxy', {
-                        'id': job_id,
-                        'asset_id': asset_id,
-                        'filepath': row[0],
-                        'output_path': f"/data/proxies/{asset_id}_proxy.mov",
-                        'force': force_regenerate
-                    })
-                    
-                    # Add job to database
-                    now = datetime.utcnow()
-                    await db.execute(
-                        """INSERT INTO so_jobs (id, type, state, asset_id, created_at, updated_at)
-                           VALUES (?, ?, ?, ?, ?, ?)""",
-                        (job_id, 'proxy', 'queued', asset_id, now.isoformat(), now.isoformat())
-                    )
-                    await db.commit()
-                    
-                    return {"message": f"Proxy creation job {job_id} queued for asset {asset_id}"}
-            except Exception as e:
-                logger.warning(f"Failed to queue proxy creation via NATS: {e}")
+        # Queue proxy creation job
+        try:
+            from app.api.main import app
+            if hasattr(app.state, 'nats'):
+                job_id = str(uuid.uuid4())
+                await app.state.nats.publish_job('proxy', {
+                    'id': job_id,
+                    'asset_id': asset_id,
+                    'filepath': row[0],
+                    'output_path': f"/data/proxies/{asset_id}_proxy.mov",
+                    'force': force_regenerate
+                })
+                
+                # Add job to database
+                now = datetime.utcnow()
+                await db.execute(
+                    """INSERT INTO so_jobs (id, type, state, asset_id, created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (job_id, 'proxy', 'queued', asset_id, now.isoformat(), now.isoformat())
+                )
+                await db.commit()
+                
+                return {"message": f"Proxy creation job {job_id} queued for asset {asset_id}"}
+        except Exception as e:
+            logger.warning(f"Failed to queue proxy creation via NATS: {e}")
         
         # Fallback to background task
         background_tasks.add_task(_create_proxy, asset_id, row[0], force_regenerate)
@@ -1220,98 +1086,6 @@ async def _process_asset(asset_id: str, filepath: str):
         logger.error(f"Failed to process asset {asset_id}: {e}")
 
 
-async def _generate_thumbnails(asset_id: str, filepath: str, force_regenerate: bool):
-    """Background task to generate thumbnails"""
-    try:
-        import subprocess
-        
-        # Create thumbnail directory
-        thumb_dir = f"/data/thumbs/{asset_id}"
-        os.makedirs(thumb_dir, exist_ok=True)
-        
-        # Generate poster frame (middle of video)
-        poster_path = f"{thumb_dir}/poster.jpg"
-        if force_regenerate or not os.path.exists(poster_path):
-            try:
-                # Get video duration
-                result = subprocess.run(
-                    ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', filepath],
-                    capture_output=True, text=True, timeout=10
-                )
-                duration = float(result.stdout.strip()) if result.returncode == 0 else 0
-                
-                # Extract frame from middle of video
-                middle_time = duration / 2 if duration > 0 else 0
-                subprocess.run(
-                    ['ffmpeg', '-ss', str(middle_time), '-i', filepath, '-vf', 'scale=1920:-1', '-frames:v', '1', '-y', poster_path],
-                    capture_output=True, timeout=30
-                )
-                logger.info(f"Generated poster for asset {asset_id}")
-            except Exception as e:
-                logger.error(f"Failed to generate poster for asset {asset_id}: {e}")
-        
-        # Generate sprite sheet (10 frames)
-        sprite_path = f"{thumb_dir}/sprite.jpg"
-        if force_regenerate or not os.path.exists(sprite_path):
-            try:
-                # Create sprite sheet with 10 frames
-                subprocess.run(
-                    ['ffmpeg', '-i', filepath, '-vf', 'fps=1/10,scale=320:-1,tile=10x1', '-frames:v', '1', '-y', sprite_path],
-                    capture_output=True, timeout=60
-                )
-                logger.info(f"Generated sprite sheet for asset {asset_id}")
-            except Exception as e:
-                logger.error(f"Failed to generate sprite sheet for asset {asset_id}: {e}")
-        
-        # Generate hover preview video (10 second clip)
-        hover_path = f"{thumb_dir}/hover.mp4"
-        if force_regenerate or not os.path.exists(hover_path):
-            try:
-                subprocess.run(
-                    ['ffmpeg', '-i', filepath, '-t', '10', '-vf', 'scale=640:-1', '-c:v', 'libx264', '-preset', 'fast', '-an', '-y', hover_path],
-                    capture_output=True, timeout=60
-                )
-                logger.info(f"Generated hover preview for asset {asset_id}")
-            except Exception as e:
-                logger.error(f"Failed to generate hover preview for asset {asset_id}: {e}")
-        
-        # Update database
-        from app.api.db.database import get_db
-        db = await get_db()
-        
-        # Check if thumbs record exists
-        cursor = await db.execute(
-            "SELECT id FROM so_thumbs WHERE asset_id = ?",
-            (asset_id,)
-        )
-        row = await cursor.fetchone()
-        
-        now = datetime.utcnow().isoformat()
-        if row:
-            # Update existing record
-            await db.execute(
-                """UPDATE so_thumbs SET poster_path = ?, sprite_path = ?, hover_path = ?, created_at = ?
-                   WHERE asset_id = ?""",
-                (poster_path, sprite_path, hover_path, now, asset_id)
-            )
-        else:
-            # Create new record
-            await db.execute(
-                """INSERT INTO so_thumbs (id, asset_id, poster_path, sprite_path, hover_path, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (str(uuid.uuid4()), asset_id, poster_path, sprite_path, hover_path, now)
-            )
-        
-        # Update asset to indicate it has thumbnails
-        await db.execute(
-            "UPDATE so_assets SET has_thumbnail = 1, updated_at = ? WHERE id = ?",
-            (now, asset_id)
-        )
-        await db.commit()
-        
-        logger.info(f"Completed thumbnail generation for asset {asset_id}")
-    except Exception as e:
-        logger.error(f"Failed to generate thumbnails for asset {asset_id}: {e}")
 
 
 async def _reprocess_asset(asset_id: str, filepath: str, force: bool):
@@ -1319,9 +1093,6 @@ async def _reprocess_asset(asset_id: str, filepath: str, force: bool):
     try:
         # Process the asset (extract metadata)
         await _process_asset(asset_id, filepath)
-        
-        # Generate thumbnails
-        await _generate_thumbnails(asset_id, filepath, force)
         
         # Update asset status
         from app.api.db.database import get_db
@@ -1389,7 +1160,7 @@ async def get_asset_detail(
     asset_id: str,
     db=Depends(get_db)
 ) -> AssetDetailResponse:
-    """Get detailed asset information including thumbnails and recent jobs."""
+    """Get detailed asset information including recent jobs."""
     
     try:
         # Get asset details
@@ -1436,13 +1207,6 @@ async def get_asset_detail(
             "asset_type": "video" if row[6] else "unknown"
         }
         
-        # Get thumbnails
-        thumbs = {
-            "poster": f"/api/assets/{asset_id}/poster.jpg",
-            "sprite": f"/api/assets/{asset_id}/sprite.jpg",
-            "hover_mp4": f"/api/assets/{asset_id}/hover.mp4"
-        }
-        
         # Get recent jobs for this asset
         cursor = await db.execute("""
             SELECT id, type, state, started_at, ended_at,
@@ -1471,7 +1235,6 @@ async def get_asset_detail(
         
         return AssetDetailResponse(
             asset=asset,
-            thumbs=thumbs,
             jobs_recent=jobs
         )
         
@@ -1503,8 +1266,6 @@ async def create_job(db, job_type: str, asset_id: str, metadata: dict) -> str:
         nats_type = job_type.replace('_', '').replace('ffmpeg', '')  # ffmpeg_remux -> remux
         if nats_type == 'proxycreate':
             nats_type = 'proxy'
-        elif nats_type == 'thumbsgenerate':
-            nats_type = 'thumbnail'
             
         await nats.publish_job(nats_type, {
             "id": job_id,
@@ -1560,14 +1321,6 @@ async def execute_asset_action(
                 "resolution": action.params.get("resolution", "1080p")
             }
             job_id = await create_job(db, "proxy_create", asset_id, metadata)
-            job_ids.append(job_id)
-            
-        elif action.action == "thumbnails":
-            metadata = {
-                "asset_id": asset_id,
-                "input_path": asset_path
-            }
-            job_id = await create_job(db, "thumbs_generate", asset_id, metadata)
             job_ids.append(job_id)
             
         elif action.action == "move":
@@ -1658,14 +1411,6 @@ async def execute_bulk_action(
                     "to_trash": bulk_action.params.get("to_trash", True)
                 }
                 job_id = await create_job(db, "asset_delete", asset_id, metadata)
-                job_ids.append(job_id)
-            
-            elif bulk_action.action == "thumbnails":
-                metadata = {
-                    "asset_id": asset_id,
-                    "input_path": asset_path
-                }
-                job_id = await create_job(db, "thumbs_generate", asset_id, metadata)
                 job_ids.append(job_id)
             
             elif bulk_action.action == "proxy":
@@ -1783,44 +1528,6 @@ async def get_asset_path(
         raise HTTPException(status_code=500, detail=f"Failed to get asset path: {str(e)}")
 
 
-@router.get("/{asset_id}/poster.jpg")
-async def get_asset_poster(
-    asset_id: str,
-    db=Depends(get_db)
-):
-    """Get asset poster thumbnail."""
-    thumb_path = f"/data/thumbs/{asset_id}/poster.jpg"
-    if os.path.exists(thumb_path):
-        return FileResponse(thumb_path, media_type="image/jpeg")
-    else:
-        # Return placeholder
-        return Response(content=b"", media_type="image/jpeg", status_code=404)
-
-
-@router.get("/{asset_id}/sprite.jpg")
-async def get_asset_sprite(
-    asset_id: str,
-    db=Depends(get_db)
-):
-    """Get asset sprite sheet."""
-    sprite_path = f"/data/thumbs/{asset_id}/sprite.jpg"
-    if os.path.exists(sprite_path):
-        return FileResponse(sprite_path, media_type="image/jpeg")
-    else:
-        return Response(content=b"", media_type="image/jpeg", status_code=404)
-
-
-@router.get("/{asset_id}/hover.mp4")
-async def get_asset_hover_video(
-    asset_id: str,
-    db=Depends(get_db)
-):
-    """Get asset hover preview video."""
-    hover_path = f"/data/thumbs/{asset_id}/hover.mp4"
-    if os.path.exists(hover_path):
-        return FileResponse(hover_path, media_type="video/mp4")
-    else:
-        return Response(content=b"", media_type="video/mp4", status_code=404)
 
 
 @router.get("/{asset_id}/timeline")

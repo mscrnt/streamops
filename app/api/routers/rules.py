@@ -356,20 +356,7 @@ RULE_METADATA = {
                     }
                 }
             }
-        },
-        {
-            "key": "thumbnail",
-            "label": "Generate Thumbnails",
-            "description": "Create poster, sprite sheet, and hover preview",
-            "schema": {
-                "type": "object",
-                "properties": {
-                    "poster": {"type": "boolean", "default": True, "title": "Poster Image"},
-                    "sprite": {"type": "boolean", "default": True, "title": "Sprite Sheet"},
-                    "hover": {"type": "boolean", "default": True, "title": "Hover Preview"}
-                }
-            }
-        },
+},
         {
             "key": "transcode_preset",
             "label": "Transcode",
@@ -452,7 +439,7 @@ async def get_rule_presets(db=Depends(get_db)) -> List[PresetResponse]:
         cursor = await db.execute("""
             SELECT meta_json 
             FROM so_rules 
-            WHERE enabled = 1 AND meta_json IS NOT NULL
+            WHERE is_active = 1 AND meta_json IS NOT NULL
         """)
         rows = await cursor.fetchall()
         
@@ -486,21 +473,21 @@ async def list_rules(
     """List all rules with pagination"""
     try:
         query = """SELECT 
-            id, name, enabled, priority, trigger_json, conditions_json,
+            id, name, is_active, priority, trigger_json, conditions_json,
             actions_json, quiet_period_sec, active_hours_json, guardrails_json,
             meta_json, last_triggered, last_error, created_at, updated_at
             FROM so_rules WHERE 1=1"""
         params = []
         
         if enabled is not None:
-            query += " AND enabled = ?"
+            query += " AND is_active = ?"
             params.append(1 if enabled else 0)
         
         # Count total
         count_query = "SELECT COUNT(*) FROM so_rules WHERE 1=1"
         count_params = []  
         if enabled is not None:
-            count_query += " AND enabled = ?"
+            count_query += " AND is_active = ?"
             count_params.append(1 if enabled else 0)
         cursor = await db.execute(count_query, count_params)
         total = (await cursor.fetchone())[0]
@@ -543,7 +530,7 @@ async def get_rule(rule_id: str, db=Depends(get_db)) -> RuleResponse:
     """Get a specific rule by ID"""
     try:
         cursor = await db.execute("""SELECT 
-            id, name, enabled, priority, trigger_json, conditions_json,
+            id, name, is_active, priority, trigger_json, conditions_json,
             actions_json, quiet_period_sec, active_hours_json, guardrails_json,
             meta_json, last_triggered, last_error, created_at, updated_at
             FROM so_rules WHERE id = ?""", (rule_id,))
@@ -589,7 +576,7 @@ async def create_rule(rule: RuleCreate, db=Depends(get_db)) -> RuleResponse:
         # Insert rule
         await db.execute("""
             INSERT INTO so_rules (
-                id, name, enabled, priority, trigger_json, conditions_json, 
+                id, name, is_active, priority, trigger_json, conditions_json, 
                 actions_json, quiet_period_sec, active_hours_json, guardrails_json,
                 meta_json, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -633,7 +620,7 @@ async def update_rule(rule_id: str, rule: RuleUpdate, db=Depends(get_db)) -> Rul
             updates.append("name = ?")
             params.append(rule.name)
         if rule.enabled is not None:
-            updates.append("enabled = ?")
+            updates.append("is_active = ?")
             params.append(1 if rule.enabled else 0)
         if rule.priority is not None:
             updates.append("priority = ?")
@@ -947,7 +934,7 @@ async def enable_rule(rule_id: str, db=Depends(get_db)):
     """Enable a rule"""
     try:
         result = await db.execute(
-            "UPDATE so_rules SET enabled = 1, updated_at = ? WHERE id = ?",
+            "UPDATE so_rules SET is_active = 1, updated_at = ? WHERE id = ?",
             (datetime.utcnow().isoformat(), rule_id)
         )
         await db.commit()
@@ -967,7 +954,7 @@ async def disable_rule(rule_id: str, db=Depends(get_db)):
     """Disable a rule"""
     try:
         result = await db.execute(
-            "UPDATE so_rules SET enabled = 0, updated_at = ? WHERE id = ?",
+            "UPDATE so_rules SET is_active = 0, updated_at = ? WHERE id = ?",
             (datetime.utcnow().isoformat(), rule_id)
         )
         await db.commit()
@@ -1014,13 +1001,6 @@ async def create_rule_from_preset(
                 {"ffmpeg_remux": {"container": params["container"], "faststart": params["faststart"]}},
                 {"move": {"dest": params["editing_folder"]}},
                 {"proxy": {"resolution": "1080p", "min_duration_sec": params["proxy_min_duration_sec"]}}
-            ]
-        elif preset_id == "generate_thumbnails":
-            conditions = [
-                RuleCondition(field="file.extension", op="in", value=[".mp4", ".mov", ".mkv"])
-            ]
-            actions = [
-                {"thumbnail": params}
             ]
         elif preset_id == "archive_old":
             conditions = [

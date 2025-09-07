@@ -100,11 +100,11 @@ class IndexJob:
             # Update existing asset
             await db.execute("""
                 UPDATE so_assets SET
-                    size = ?, mtime = ?, ctime = ?,
-                    hash_xxh64 = ?,
-                    duration_sec = ?, video_codec = ?, audio_codec = ?, 
-                    width = ?, height = ?, fps = ?, container = ?,
-                    streams_json = ?, status = ?, updated_at = ?
+                    size_bytes = ?, mtime = ?, ctime = ?,
+                    hash = ?,
+                    duration_s = ?, video_codec = ?, audio_codec = ?, 
+                    width = ?, height = ?, fps = ?, has_audio = ?, container = ?,
+                    streams_json = ?, indexed_at = ?, updated_at = ?
                 WHERE id = ?
             """, (
                 file_size, file_mtime, file_ctime,
@@ -115,9 +115,10 @@ class IndexJob:
                 media_info.get("width"),
                 media_info.get("height"),
                 media_info.get("fps"),
+                1 if media_info.get("audio_codec") else 0,
                 media_info.get("container"),
                 json.dumps({**media_info.get("streams_data", {}), "type": asset_type, "streams": media_info.get("streams", [])}),
-                "completed",
+                now,
                 now,
                 asset_id
             ))
@@ -126,14 +127,17 @@ class IndexJob:
             # Insert new asset
             await db.execute("""
                 INSERT INTO so_assets (
-                    id, abs_path, drive_hint, size, mtime, ctime,
-                    hash_xxh64, duration_sec, video_codec, audio_codec, 
-                    width, height, fps, container,
-                    streams_json, tags_json, status,
+                    id, abs_path, dir_path, filename, size_bytes, mtime, ctime,
+                    hash, duration_s, video_codec, audio_codec, 
+                    width, height, fps, has_audio, container,
+                    streams_json, tags_json, status, indexed_at,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
-                asset_id, file_path, data.get("drive", ""), 
+                asset_id, 
+                file_path,
+                os.path.dirname(file_path),
+                os.path.basename(file_path),
                 file_size, file_mtime, file_ctime,
                 file_hash,
                 media_info.get("duration"),
@@ -142,10 +146,12 @@ class IndexJob:
                 media_info.get("width"),
                 media_info.get("height"),
                 media_info.get("fps"),
+                1 if media_info.get("audio_codec") else 0,
                 media_info.get("container"),
                 json.dumps({**media_info.get("streams_data", {}), "type": asset_type, "streams": media_info.get("streams", [])}),
                 json.dumps([]),  # Empty tags for now
-                "completed",
+                'ready',  # status
+                now,
                 now, now
             ))
             action = "created"

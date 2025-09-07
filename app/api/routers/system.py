@@ -192,7 +192,7 @@ async def get_system_metrics(
                 COUNT(*) as total_jobs,
                 SUM(CASE WHEN state = 'completed' THEN 1 ELSE 0 END) as completed,
                 SUM(CASE WHEN state = 'failed' THEN 1 ELSE 0 END) as failed,
-                AVG(CASE WHEN state = 'completed' THEN progress ELSE NULL END) as avg_progress
+                AVG(CASE WHEN state = 'completed' THEN 100 ELSE NULL END) as avg_completion
                FROM so_jobs
                WHERE created_at >= ?""",
             (start_time.isoformat(),)
@@ -600,8 +600,8 @@ async def get_system_summary(request: Request, db=Depends(get_db)) -> Dict[str, 
             """SELECT 
                 SUM(CASE WHEN state = 'completed' THEN 1 ELSE 0 END) as completed,
                 SUM(CASE WHEN state = 'failed' THEN 1 ELSE 0 END) as failed,
-                AVG(CASE WHEN state = 'completed' AND progress = 100 
-                    THEN CAST((julianday(updated_at) - julianday(created_at)) * 86400 AS INTEGER) 
+                AVG(CASE WHEN state = 'completed'
+                    THEN CAST((julianday(finished_at) - julianday(started_at)) * 86400 AS INTEGER) 
                     ELSE NULL END) as avg_duration
                FROM so_jobs 
                WHERE created_at >= ?""",
@@ -803,7 +803,7 @@ async def perform_system_action(
                 
                 # Get all existing assets
                 cursor = await db.execute(
-                    "SELECT id, abs_path FROM so_assets WHERE status != 'archived'"
+                    "SELECT id, abs_path FROM so_assets"
                 )
                 assets = await cursor.fetchall()
                 
