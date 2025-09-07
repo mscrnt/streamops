@@ -29,6 +29,7 @@ class RulesEngine:
         self.pending_executions = {}  # Track pending rule executions by file path
         self.execution_queue = []  # Queue of (rule, event_data) tuples waiting for quiet period
         self.quiet_period_task = None  # Track the quiet period waiting task
+        self.interrupted_jobs = []  # Track jobs that were interrupted by new recordings
         
     async def load_rules(self):
         """Load rules from database"""
@@ -188,21 +189,73 @@ class RulesEngine:
                     obs_status = await self._check_obs_status()
                     if obs_status.get('recording') or obs_status.get('streaming'):
                         logger.info(f"Recording started during quiet period (elapsed: {quiet_elapsed}s), resetting...")
+                        # Save current execution queue to interrupted jobs list and update their state
+                        for item in self.execution_queue:
+                            if item not in self.interrupted_jobs:
+                                self.interrupted_jobs.append(item)
+                                rule, event_data, execution_key = item
+                                logger.info(f"Saved interrupted job for later processing: {rule.name}")
+                                
+                                # Update deferred jobs to queued state since they're interrupted
+                                asset_id = event_data.get('asset_id')
+                                if asset_id:
+                                    import sqlite3
+                                    conn = sqlite3.connect("/data/db/streamops.db")
+                                    try:
+                                        cursor = conn.cursor()
+                                        cursor.execute("""
+                                            UPDATE so_jobs 
+                                            SET state = 'queued',
+                                                blocked_reason = NULL,
+                                                next_run_at = NULL,
+                                                updated_at = datetime('now')
+                                            WHERE asset_id = ? 
+                                            AND state = 'deferred'
+                                        """, (asset_id,))
+                                        conn.commit()
+                                        if cursor.rowcount > 0:
+                                            logger.info(f"Updated {cursor.rowcount} interrupted jobs to queued state for asset {asset_id}")
+                                    finally:
+                                        conn.close()
                         break  # Go back to waiting for recording to stop
                     
                     if quiet_elapsed % 10 == 0:
                         logger.debug(f"Quiet period: {quiet_elapsed}/{max_quiet_period}s (queue: {len(self.execution_queue)} items)")
                 else:
-                    # Quiet period completed - activate deferred jobs and clear queue
-                    logger.info(f"Quiet period completed, activating deferred jobs for {len(self.execution_queue)} queued rules")
+                    # Quiet period completed - activate and publish all jobs
+                    logger.info(f"Quiet period completed, activating deferred jobs and publishing queued jobs")
+                    
+                    # Get asset IDs from interrupted jobs to publish their queued jobs
+                    interrupted_asset_ids = []
+                    for _, event_data, _ in self.interrupted_jobs:
+                        asset_id = event_data.get('asset_id')
+                        if asset_id and asset_id not in interrupted_asset_ids:
+                            interrupted_asset_ids.append(asset_id)
+                    
+                    # Activate any remaining deferred jobs (this changes them from deferred to queued and publishes them)
                     activated_count = await self._activate_deferred_jobs()
                     logger.info(f"Activated {activated_count} deferred jobs after quiet period")
                     
-                    # Clear the execution queue since jobs were already created as deferred
-                    queue_copy = self.execution_queue.copy()
-                    self.execution_queue.clear()
-                    for _, _, execution_key in queue_copy:
+                    # Publish the already-queued jobs from interrupted recordings
+                    if interrupted_asset_ids and self.nats:
+                        logger.info(f"Publishing {len(interrupted_asset_ids)} interrupted asset jobs to NATS")
+                        await self._publish_queued_jobs(interrupted_asset_ids)
+                    
+                    # Clear the execution queue and interrupted jobs
+                    # We don't need to execute rules again - jobs were already created
+                    queue_size = len(self.execution_queue)
+                    interrupted_size = len(self.interrupted_jobs)
+                    
+                    # Clear pending executions for all queued items
+                    for _, _, execution_key in self.execution_queue:
                         self.pending_executions.pop(execution_key, None)
+                    for _, _, execution_key in self.interrupted_jobs:
+                        self.pending_executions.pop(execution_key, None)
+                    
+                    self.execution_queue.clear()
+                    self.interrupted_jobs.clear()
+                    
+                    logger.info(f"Cleared {queue_size} execution queue items and {interrupted_size} interrupted items")
                     return
             else:
                 # No quiet period needed, process immediately
@@ -747,6 +800,36 @@ class RulesEngine:
             logger.info(f"Created deferred job {job_id} for {action_type} (job type: {job_type}), will run after quiet period")
         
         logger.info(f"Created {jobs_created} deferred jobs for rule {rule.name}")
+    
+    async def _publish_queued_jobs(self, asset_ids: List[str]):
+        """Publish already-queued jobs to NATS for processing"""
+        conn = await aiosqlite.connect("/data/db/streamops.db")
+        conn.row_factory = aiosqlite.Row
+        
+        # Get all queued jobs for the specified assets
+        placeholders = ','.join('?' * len(asset_ids))
+        cursor = await conn.execute(f"""
+            SELECT id, type, asset_id, payload_json
+            FROM so_jobs 
+            WHERE state = 'queued' 
+            AND asset_id IN ({placeholders})
+        """, asset_ids)
+        
+        jobs = await cursor.fetchall()
+        await conn.close()
+        
+        # Publish each job to NATS
+        for job in jobs:
+            payload = json.loads(job['payload_json']) if job['payload_json'] else {}
+            if 'id' not in payload:
+                payload['id'] = job['id']
+            if 'asset_id' not in payload:
+                payload['asset_id'] = job['asset_id']
+            
+            await self.nats.publish_job(job['type'], payload)
+            logger.info(f"Published queued job {job['id']} of type {job['type']} to NATS")
+        
+        return len(jobs)
     
     async def _activate_deferred_jobs(self):
         """Activate all deferred jobs that are ready to run"""

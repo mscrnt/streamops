@@ -233,15 +233,14 @@ class DeferredJobScheduler:
             
             # Publish to appropriate queue
             if self.nats:
-                queue_name = f"jobs.{job_type}"
-                message = {
+                job_data = {
                     'id': job_id,
                     'type': job_type,
                     'asset_id': asset_id,
                     'payload': payload
                 }
-                await self.nats.publish(queue_name, message)
-                logger.info(f"Promoted deferred job {job_id} to queue {queue_name}")
+                await self.nats.publish_job(job_type, job_data)
+                logger.info(f"Promoted deferred job {job_id} to queue jobs.{job_type}")
             else:
                 logger.warning(f"No NATS service, job {job_id} updated but not queued")
                 
