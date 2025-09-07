@@ -447,7 +447,7 @@ export default function RuleComposer({ preset, rule, onSave, onCancel, saving })
                 options={[
                   { value: 'none', label: 'Select target folder...' },
                   ...targetPaths.map(p => ({
-                    value: `${p.value}/{year}/{month}/{filename}`,
+                    value: `${p.value}/{filename}`,
                     label: `${p.label}`
                   }))
                 ]}
@@ -456,7 +456,7 @@ export default function RuleComposer({ preset, rule, onSave, onCancel, saving })
               />
             </div>
             <p className="text-xs text-muted-foreground">
-              Variables: {'{date}'}, {'{year}'}, {'{month}'}, {'{filename}'}
+              File will be moved/copied with its current filename
             </p>
           </div>
         )
