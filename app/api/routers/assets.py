@@ -129,31 +129,31 @@ async def list_assets(
         
         assets = []
         for row in rows:
-            streams = json.loads(row[15]) if row[15] else {}
-            tags = json.loads(row[16]) if row[16] else []
+            streams = json.loads(row[16]) if row[16] else {}
+            tags = json.loads(row[17]) if row[17] else []
             
             # Build metadata from row data
             metadata = {
-                "size_bytes": row[3],
+                "size_bytes": row[4],
                 "duration": row[8],
                 "width": row[11],
                 "height": row[12],
                 "fps": row[13],
                 "codec": row[9],
-                "container": row[14]
+                "container": row[15]
             }
             
             assets.append(AssetResponse(
                 id=row[0],
                 filepath=row[1],
-                filename=os.path.basename(row[1]),
+                filename=os.path.basename(row[1]) if row[1] else "Unknown",
                 asset_type=AssetType(streams.get('type', 'video')) if isinstance(streams, dict) else AssetType('video'),
-                status=AssetStatus(row[17]),
+                status=AssetStatus(row[18]),
                 session_id=tags.get('session_id') if isinstance(tags, dict) else None,
                 tags=tags if isinstance(tags, list) else [],
                 metadata=metadata,
-                created_at=datetime.fromisoformat(row[18]),
-                updated_at=datetime.fromisoformat(row[19])
+                created_at=datetime.fromisoformat(row[20]) if row[20] else datetime.utcnow(),
+                updated_at=datetime.fromisoformat(row[21]) if row[21] else datetime.utcnow()
             ))
         
         return AssetListResponse(

@@ -8,6 +8,7 @@ class AssetStatus(str, Enum):
     """Asset processing status"""
     pending = "pending"
     processing = "processing"
+    ready = "ready"
     completed = "completed"
     error = "error"
     archived = "archived"
