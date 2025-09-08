@@ -417,57 +417,37 @@ class RulesEngine:
         return await handler(params, ctx)
     
     async def _action_remux(self, params: Dict[str, Any], ctx: RuleContext) -> ActionResult:
-        """Remux action - awaits job completion and updates ctx.active"""
+        """Remux action - create a remux job"""
         source = ctx.active.path
         if not source.exists():
             return ActionResult(success=False, error=f"Source not found: {source}")
         
-        job_id = self._generate_job_id("remux")
-        asset_id = ctx.vars.get("asset_id", "")
         container = params.get("container", "mov")
         
-        # Enqueue job
-        await self._enqueue_job(job_id, "ffmpeg_remux", asset_id, {
-            "input_path": str(source),
-            "output_format": container,
-            "faststart": params.get("faststart", True)
-        })
-        
-        # Publish to NATS
+        # Create remux job
         if self.nats:
+            job_id = self._generate_job_id("remux")
             await self.nats.publish_job("remux", {
                 "id": job_id,
-                "input_path": str(source),
-                "output_format": container,
-                "faststart": params.get("faststart", True)
+                "data": {
+                    "input_path": str(source),
+                    "output_format": container,
+                    "faststart": params.get("faststart", True),
+                    "remove_original": True  # Always remove original after remux
+                }
             })
-        
-        logger.info(f"Awaiting remux job {job_id}")
-        
-        # CRITICAL: Await job completion
-        result = await self._await_job_completion(job_id, timeout=600)
-        
-        if not result.get("success"):
-            return ActionResult(success=False, error=f"Remux job {job_id} failed")
+            logger.info(f"Queued remux job {job_id}: {source} -> .{container}")
             
-        output_path = result.get("output_path")
-        if not output_path:
-            output_path = str(source.with_suffix(f".{container}"))
-            
-        out_path = Path(output_path)
-        if not out_path.exists():
-            logger.error(f"Remux output not found: {out_path}")
-            return ActionResult(success=False, error=f"Output not found: {out_path}")
+            # Store job data for tracking
+            ctx.vars[f"remux_job_{job_id}"] = {
+                "source": str(source),
+                "format": container
+            }
         
-        # Update context with new artifact
-        new_artifact = Artifact(path=out_path, ext=out_path.suffix)
-        ctx.update_active(new_artifact)
-        
-        logger.info(f"Remux completed: {source} → {out_path}")
-        return ActionResult(primary_output_path=out_path)
+        return ActionResult(success=True)
     
     async def _action_move(self, params: Dict[str, Any], ctx: RuleContext) -> ActionResult:
-        """Move action - uses ctx.active and updates it after atomic move"""
+        """Move action - create a move job"""
         source = ctx.active.path
         if not source.exists():
             return ActionResult(success=False, error=f"Source not found: {source}")
@@ -478,37 +458,29 @@ class RulesEngine:
         
         # Build target using template expansion from ACTIVE artifact
         target_path = build_target_path(target_template, ctx)
-        target_path.parent.mkdir(parents=True, exist_ok=True)
         
-        try:
-            # Atomic move
-            os.replace(str(source), str(target_path))
+        # Create move job
+        if self.nats:
+            job_id = self._generate_job_id("move")
+            await self.nats.publish_job("move", {
+                "id": job_id,
+                "data": {
+                    "input_path": str(source),
+                    "target_path": str(target_path)
+                }
+            })
+            logger.info(f"Queued move job {job_id}: {source} -> {target_path}")
             
-            # Update context with moved artifact
-            moved = Artifact(path=target_path, ext=target_path.suffix, mime=ctx.active.mime)
-            ctx.update_active(moved)
-            
-            # Emit move event if we have an asset_id
-            asset_id = ctx.vars.get("asset_id")
-            if asset_id:
-                try:
-                    from app.api.services.asset_events import AssetEventService
-                    await AssetEventService.emit_move_completed(
-                        asset_id, str(source), str(target_path)
-                    )
-                except Exception as e:
-                    logger.debug(f"Could not emit move event: {e}")
-            
-            logger.info(f"Moved: {source} → {target_path}")
-            return ActionResult(primary_output_path=target_path)
-            
-        except Exception as e:
-            logger.error(f"Failed to move file: {e}")
-            return ActionResult(success=False, error=str(e))
+            # Store job data for tracking
+            ctx.vars[f"move_job_{job_id}"] = {
+                "source": str(source),
+                "target": str(target_path)
+            }
+        
+        return ActionResult(success=True)
     
     async def _action_copy(self, params: Dict[str, Any], ctx: RuleContext) -> ActionResult:
-        """Copy action - uses ctx.active"""
-        import shutil
+        """Copy action - create a copy job"""
         source = ctx.active.path
         
         if not source.exists():
@@ -518,17 +490,28 @@ class RulesEngine:
         if not target_template:
             return ActionResult(success=False, error="No target specified")
         
+        # Build target using template expansion from ACTIVE artifact
         target_path = build_target_path(target_template, ctx)
-        target_path.parent.mkdir(parents=True, exist_ok=True)
         
-        try:
-            shutil.copy2(str(source), str(target_path))
-            logger.info(f"Copied: {source} → {target_path}")
-            # Note: Copy doesn't update ctx.active - original remains active
-            return ActionResult(primary_output_path=target_path)
-        except Exception as e:
-            logger.error(f"Failed to copy file: {e}")
-            return ActionResult(success=False, error=str(e))
+        # Create copy job
+        if self.nats:
+            job_id = self._generate_job_id("copy")
+            await self.nats.publish_job("copy", {
+                "id": job_id,
+                "data": {
+                    "input_path": str(source),
+                    "target_path": str(target_path)
+                }
+            })
+            logger.info(f"Queued copy job {job_id}: {source} -> {target_path}")
+            
+            # Store job data for tracking
+            ctx.vars[f"copy_job_{job_id}"] = {
+                "source": str(source),
+                "target": str(target_path)
+            }
+        
+        return ActionResult(success=True)
     
     async def _action_index(self, params: Dict[str, Any], ctx: RuleContext) -> ActionResult:
         """Index asset in database"""
@@ -536,13 +519,15 @@ class RulesEngine:
             job_id = self._generate_job_id("index")
             await self.nats.publish_job("index", {
                 "id": job_id,
-                "input_path": str(ctx.active.path)
+                "data": {
+                    "file_path": str(ctx.active.path)
+                }
             })
             logger.info(f"Queued index job {job_id}")
         return ActionResult(success=True)
     
     async def _action_proxy(self, params: Dict[str, Any], ctx: RuleContext) -> ActionResult:
-        """Proxy action - awaits completion and returns output path"""
+        """Proxy action - create a proxy job"""
         source = ctx.active.path
         if not source.exists():
             return ActionResult(success=False, error=f"Source not found: {source}")
@@ -613,29 +598,19 @@ class RulesEngine:
         if "audio_channels" in params:
             job_params["audio_channels"] = params["audio_channels"]
         
-        # Enqueue job
-        await self._enqueue_job(job_id, "proxy", ctx.vars.get("asset_id", ""), job_params)
-        
+        # Create proxy job
         if self.nats:
             await self.nats.publish_job("proxy", {
                 "id": job_id,
-                **job_params
+                "data": job_params
             })
-        
-        logger.info(f"Awaiting proxy job {job_id}")
-        
-        # CRITICAL: Await job completion
-        result = await self._await_job_completion(job_id, timeout=3600)
-        
-        if not result.get("success"):
-            return ActionResult(success=False, error=f"Proxy job {job_id} failed")
-        
-        output_path = result.get("output_path")
-        if output_path:
-            out_path = Path(output_path)
-            logger.info(f"Proxy completed: {source} → {out_path}")
-            # Note: Proxy doesn't update ctx.active unless explicitly configured
-            return ActionResult(primary_output_path=out_path)
+            logger.info(f"Queued proxy job {job_id} for {source}")
+            
+            # Store job data for tracking
+            ctx.vars[f"proxy_job_{job_id}"] = {
+                "source": str(source),
+                "params": job_params
+            }
         
         return ActionResult(success=True)
     
@@ -645,8 +620,10 @@ class RulesEngine:
             job_id = self._generate_job_id("transcode")
             await self.nats.publish_job("transcode", {
                 "id": job_id,
-                "input_path": str(ctx.active.path),
-                "preset": params.get("preset", "web_1080p")
+                "data": {
+                    "input_path": str(ctx.active.path),
+                    "preset": params.get("preset", "web_1080p")
+                }
             })
             logger.info(f"Queued transcode job {job_id}")
         return ActionResult(success=True)
@@ -689,7 +666,8 @@ class RulesEngine:
     # Helper methods
     
     async def _enqueue_job(self, job_id: str, job_type: str, asset_id: str, payload: Dict[str, Any], 
-                          deferred: bool = False, blocked_reason: str = None):
+                          deferred: bool = False, blocked_reason: str = None, 
+                          depends_on: str = None, rule_execution_id: str = None):
         """Enqueue job in database, optionally as deferred"""
         conn = await aiosqlite.connect("/data/db/streamops.db")
         
@@ -705,8 +683,9 @@ class RulesEngine:
         
         await conn.execute("""
             INSERT INTO so_jobs (id, type, asset_id, payload_json, state, 
-                               blocked_reason, next_run_at, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                               blocked_reason, next_run_at, depends_on, rule_execution_id,
+                               created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             job_id,
             job_type,
@@ -715,6 +694,8 @@ class RulesEngine:
             state,
             blocked_reason,
             next_run_at,
+            depends_on,
+            rule_execution_id,
             datetime.utcnow().isoformat(),
             datetime.utcnow().isoformat()
         ))
@@ -726,9 +707,13 @@ class RulesEngine:
         logger.info(f"Starting _create_deferred_jobs_for_rule for rule {rule.name}")
         asset_id = event_data.get('asset_id', '')
         
+        # Generate a unique ID for this rule execution to link jobs together
+        import uuid
+        rule_execution_id = str(uuid.uuid4())
+        
         # Get asset duration for proxy condition checking
         duration_sec = event_data.get('duration_sec', 0)
-        logger.info(f"Asset ID: {asset_id}, Duration from event: {duration_sec}s")
+        logger.info(f"Asset ID: {asset_id}, Duration from event: {duration_sec}s, Rule execution: {rule_execution_id}")
         if duration_sec == 0 and asset_id:
             # Try to get duration from database
             conn = await aiosqlite.connect("/data/db/streamops.db")
@@ -744,13 +729,16 @@ class RulesEngine:
         # Create a deferred job for each action in the rule
         logger.info(f"Processing {len(rule.do_actions)} actions for deferred job creation")
         jobs_created = 0
+        previous_job_id = None  # Track the previous job in the chain
+        job_chain = []  # Keep track of all jobs in this chain
+        
         for action in rule.do_actions:
             action_type = action.get("type")
             params = action.get("params", {})
             logger.info(f"Processing action: {action_type}")
             
             # Skip non-job actions
-            if action_type not in ['ffmpeg_remux', 'proxy', 'transcode_preset']:
+            if action_type not in ['ffmpeg_remux', 'move', 'copy', 'proxy', 'transcode_preset', 'index_asset']:
                 logger.info(f"Skipping non-job action: {action_type}")
                 continue
             
@@ -770,8 +758,11 @@ class RulesEngine:
             # Map action type to job type
             job_type_map = {
                 'ffmpeg_remux': 'remux',
+                'move': 'move',
+                'copy': 'copy',
                 'proxy': 'proxy', 
-                'transcode_preset': 'transcode'
+                'transcode_preset': 'transcode',
+                'index_asset': 'index'
             }
             job_type = job_type_map.get(action_type, action_type)
             
@@ -782,22 +773,82 @@ class RulesEngine:
             payload['quiet_period_sec'] = rule.quiet_period_sec
             payload['duration_sec'] = duration_sec  # Pass duration to job
             
-            # Add extra params for remux
+            # Add extra params for specific action types
             if action_type == 'ffmpeg_remux':
                 payload['output_format'] = params.get('container', 'mov')
                 payload['faststart'] = params.get('faststart', True)
+                payload['remove_original'] = True
+            elif action_type == 'move':
+                # For move, we need to expand the target path template
+                from .template import expand_template
+                from .models import RuleContext, Artifact
+                
+                # Check if there's a remux action before this move
+                file_path = Path(event_data.get('path', ''))
+                
+                # Look for a previous remux action in the rule
+                remux_format = None
+                for i, prev_action in enumerate(rule.do_actions[:rule.do_actions.index(action)]):
+                    if prev_action.get('type') == 'ffmpeg_remux':
+                        remux_format = prev_action.get('params', {}).get('container', 'mov')
+                        break
+                
+                # If there was a remux before this move, use the remuxed filename
+                if remux_format:
+                    file_path = file_path.with_suffix(f'.{remux_format}')
+                    payload['input_path'] = str(file_path)  # Override with remuxed path
+                
+                artifact = Artifact(path=file_path)
+                ctx = RuleContext(original=artifact, active=artifact)
+                ctx.vars = {'asset_id': asset_id}
+                target_template = params.get('target', '')
+                if target_template:
+                    target_path = expand_template(target_template, ctx)
+                    payload['target_path'] = target_path
+            elif action_type == 'copy':
+                # For copy, we need to expand the target path template
+                from .template import expand_template
+                from .models import RuleContext, Artifact
+                
+                # Check if there's a remux action before this copy
+                file_path = Path(event_data.get('path', ''))
+                
+                # Look for a previous remux action in the rule
+                remux_format = None
+                for i, prev_action in enumerate(rule.do_actions[:rule.do_actions.index(action)]):
+                    if prev_action.get('type') == 'ffmpeg_remux':
+                        remux_format = prev_action.get('params', {}).get('container', 'mov')
+                        break
+                
+                # If there was a remux before this copy, use the remuxed filename
+                if remux_format:
+                    file_path = file_path.with_suffix(f'.{remux_format}')
+                    payload['input_path'] = str(file_path)  # Override with remuxed path
+                
+                artifact = Artifact(path=file_path)
+                ctx = RuleContext(original=artifact, active=artifact)
+                ctx.vars = {'asset_id': asset_id}
+                target_template = params.get('target', '')
+                if target_template:
+                    target_path = expand_template(target_template, ctx)
+                    payload['target_path'] = target_path
             
             # Create deferred job with next_run_at set
+            # First job in chain doesn't depend on anything, subsequent jobs depend on previous
             await self._enqueue_job(
                 job_id, 
                 job_type,  # Use mapped job type
                 asset_id, 
                 payload,
                 deferred=True,
-                blocked_reason=f"Waiting for {rule.quiet_period_sec}s quiet period"
+                blocked_reason=f"Waiting for {rule.quiet_period_sec}s quiet period",
+                depends_on=previous_job_id,
+                rule_execution_id=rule_execution_id
             )
+            job_chain.append(job_id)
             jobs_created += 1
-            logger.info(f"Created deferred job {job_id} for {action_type} (job type: {job_type}), will run after quiet period")
+            logger.info(f"Created deferred job {job_id} for {action_type} (job type: {job_type}), depends_on: {previous_job_id if previous_job_id else 'None'}, will run after quiet period")
+            previous_job_id = job_id  # This job becomes the dependency for the next one
         
         logger.info(f"Created {jobs_created} deferred jobs for rule {rule.name}")
     
@@ -807,12 +858,14 @@ class RulesEngine:
         conn.row_factory = aiosqlite.Row
         
         # Get all queued jobs for the specified assets
+        # ONLY get jobs with no dependencies - dependent jobs will be triggered when their dependency completes
         placeholders = ','.join('?' * len(asset_ids))
         cursor = await conn.execute(f"""
             SELECT id, type, asset_id, payload_json
             FROM so_jobs 
             WHERE state = 'queued' 
             AND asset_id IN ({placeholders})
+            AND depends_on IS NULL
         """, asset_ids)
         
         jobs = await cursor.fetchall()
@@ -821,10 +874,10 @@ class RulesEngine:
         # Publish each job to NATS
         for job in jobs:
             payload = json.loads(job['payload_json']) if job['payload_json'] else {}
-            if 'id' not in payload:
-                payload['id'] = job['id']
-            if 'asset_id' not in payload:
-                payload['asset_id'] = job['asset_id']
+            
+            # Add id and asset_id to payload for NATS
+            payload['id'] = job['id']
+            payload['asset_id'] = job['asset_id']
             
             await self.nats.publish_job(job['type'], payload)
             logger.info(f"Published queued job {job['id']} of type {job['type']} to NATS")
@@ -836,24 +889,33 @@ class RulesEngine:
         conn = await aiosqlite.connect("/data/db/streamops.db")
         conn.row_factory = aiosqlite.Row
         
-        # Get all deferred jobs that are ready
+        # Get all deferred jobs that are ready AND don't have pending dependencies
+        # Only get jobs that either have no dependency OR their dependency is completed
         cursor = await conn.execute("""
-            SELECT id, type, asset_id, payload_json
-            FROM so_jobs 
-            WHERE state = 'deferred' 
-            AND (next_run_at IS NULL OR next_run_at <= ?)
+            SELECT j.id, j.type, j.asset_id, j.payload_json, j.depends_on
+            FROM so_jobs j
+            LEFT JOIN so_jobs dep ON j.depends_on = dep.id
+            WHERE j.state = 'deferred' 
+            AND (j.next_run_at IS NULL OR j.next_run_at <= ?)
+            AND (j.depends_on IS NULL OR dep.state = 'completed')
         """, (datetime.utcnow().isoformat(),))
         
         jobs = await cursor.fetchall()
         
-        # Update all deferred jobs to queued state
+        # Update only the jobs that are ready AND have no pending dependencies
         await conn.execute("""
             UPDATE so_jobs 
             SET state = 'queued', 
                 blocked_reason = NULL,
                 updated_at = ?
-            WHERE state = 'deferred' 
-            AND (next_run_at IS NULL OR next_run_at <= ?)
+            WHERE id IN (
+                SELECT j.id
+                FROM so_jobs j
+                LEFT JOIN so_jobs dep ON j.depends_on = dep.id
+                WHERE j.state = 'deferred' 
+                AND (j.next_run_at IS NULL OR j.next_run_at <= ?)
+                AND (j.depends_on IS NULL OR dep.state = 'completed')
+            )
         """, (
             datetime.utcnow().isoformat(),
             datetime.utcnow().isoformat()
@@ -862,15 +924,22 @@ class RulesEngine:
         await conn.commit()
         await conn.close()
         
-        # Publish each job to NATS for processing
+        # Publish each job to NATS for processing - but ONLY jobs without dependencies
+        # Jobs with dependencies will be triggered when their dependency completes
         if self.nats and jobs:
             for job in jobs:
-                payload = json.loads(job['payload_json']) if job['payload_json'] else {}
-                payload['id'] = job['id']
-                payload['asset_id'] = job['asset_id']
-                
-                await self.nats.publish_job(job['type'], payload)
-                logger.info(f"Published deferred job {job['id']} of type {job['type']} to NATS")
+                if job['depends_on'] is None:  # Only publish jobs without dependencies
+                    payload = json.loads(job['payload_json']) if job['payload_json'] else {}
+                    
+                    # Add id and asset_id to payload for NATS
+                    payload['id'] = job['id']
+                    payload['asset_id'] = job['asset_id']
+                    
+                    logger.info(f"Publishing job payload: {payload}")
+                    await self.nats.publish_job(job['type'], payload)
+                    logger.info(f"Published deferred job {job['id']} of type {job['type']} to NATS")
+                else:
+                    logger.info(f"Skipping dependent job {job['id']} - will be triggered when {job['depends_on']} completes")
         
         return len(jobs)
     

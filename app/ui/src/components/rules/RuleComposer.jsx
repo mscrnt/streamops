@@ -12,7 +12,8 @@ import {
   AlertCircle,
   HelpCircle,
   Settings,
-  Shield
+  Shield,
+  GripVertical
 } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/Card'
 import Button from '@/components/ui/Button'
@@ -115,6 +116,8 @@ const PRESET_TEMPLATES = {
 
 export default function RuleComposer({ preset, rule, onSave, onCancel, saving }) {
   const { api } = useApi()
+  const [draggedIndex, setDraggedIndex] = useState(null)
+  const [dragOverIndex, setDragOverIndex] = useState(null)
   
   // Get available mounts for path selection
   const { data: mounts } = useQuery({
@@ -268,6 +271,21 @@ export default function RuleComposer({ preset, rule, onSave, onCancel, saving })
       ...prev,
       actions: prev.actions.filter((_, i) => i !== index)
     }))
+  }
+  
+  // Reorder actions via drag and drop
+  const reorderActions = (fromIndex, toIndex) => {
+    if (fromIndex === toIndex) return
+    
+    setRuleData(prev => {
+      const newActions = [...prev.actions]
+      const [movedItem] = newActions.splice(fromIndex, 1)
+      newActions.splice(toIndex, 0, movedItem)
+      return {
+        ...prev,
+        actions: newActions
+      }
+    })
   }
   
   // Get field type
@@ -697,10 +715,46 @@ export default function RuleComposer({ preset, rule, onSave, onCancel, saving })
           <div className="space-y-2">
             {ruleData.actions.map((action, index) => {
               const actionDef = ACTION_TYPES.find(a => a.value === action.type)
+              const isDragging = draggedIndex === index
+              const isDragOver = dragOverIndex === index
               
               return (
-                <div key={index} className="p-3 bg-muted/30 rounded-lg">
+                <div 
+                  key={index} 
+                  className={`p-3 bg-muted/30 rounded-lg transition-all ${
+                    isDragging ? 'opacity-50' : ''
+                  } ${isDragOver ? 'border-2 border-primary' : ''}`}
+                  draggable
+                  onDragStart={(e) => {
+                    setDraggedIndex(index)
+                    e.dataTransfer.effectAllowed = 'move'
+                  }}
+                  onDragEnd={() => {
+                    setDraggedIndex(null)
+                    setDragOverIndex(null)
+                  }}
+                  onDragOver={(e) => {
+                    e.preventDefault()
+                    if (draggedIndex !== null && draggedIndex !== index) {
+                      setDragOverIndex(index)
+                    }
+                  }}
+                  onDragLeave={() => {
+                    setDragOverIndex(null)
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault()
+                    if (draggedIndex !== null) {
+                      reorderActions(draggedIndex, index)
+                      setDraggedIndex(null)
+                      setDragOverIndex(null)
+                    }
+                  }}
+                >
                   <div className="flex items-center space-x-2">
+                    <div className="cursor-move text-muted-foreground hover:text-foreground">
+                      <GripVertical className="h-5 w-5" />
+                    </div>
                     <span className="text-2xl">{actionDef?.icon}</span>
                     <SimpleSelect
                       value={action.type}

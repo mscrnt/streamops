@@ -13,10 +13,13 @@ class RemuxJob(BaseJob):
     
     async def process(self, job_data: Dict[str, Any]) -> Dict[str, Any]:
         """Remux media file to new container format"""
+        logger.info(f"RemuxJob received job_data: {job_data}")
         job_id = job_data.get("id")
         data = job_data.get("data", {})
+        logger.info(f"RemuxJob extracted data: {data}")
         
         input_path = data.get("input_path")
+        logger.info(f"RemuxJob input_path: {input_path}")
         output_format = data.get("output_format", "mov")
         output_path = data.get("output_path")
         faststart = data.get("faststart", True)
@@ -29,52 +32,11 @@ class RemuxJob(BaseJob):
         gpu_available = await self.check_gpu_available()
         use_hardware = use_gpu and gpu_available
         
-        # Generate output path if not provided
+        # Generate output path if not provided - ALWAYS in the same directory as input
         if not output_path:
             input_file = Path(input_path)
-            
-            # Check if we're remuxing from Recording folder to Editing folder
-            try:
-                import aiosqlite
-                conn = await aiosqlite.connect("/data/db/streamops.db")
-                
-                # Get Recording and Editing paths from roles
-                cursor = await conn.execute("""
-                    SELECT role, abs_path FROM so_roles 
-                    WHERE role IN ('recording', 'editing')
-                """)
-                roles = {}
-                async for row in cursor:
-                    roles[row[0]] = row[1]
-                await conn.close()
-                
-                # If input is in Recording folder and Editing folder exists, put output there
-                if roles.get('recording') and roles.get('editing'):
-                    recording_path = Path(roles['recording'])
-                    editing_path = Path(roles['editing'])
-                    
-                    # Check if input file is in Recording folder or its subdirectories
-                    try:
-                        input_file.relative_to(recording_path)
-                        # File is in recording folder, put output in editing folder with same structure
-                        relative_path = input_file.relative_to(recording_path)
-                        output_dir = editing_path / relative_path.parent
-                        
-                        # Create output directory if it doesn't exist
-                        output_dir.mkdir(parents=True, exist_ok=True)
-                        
-                        # Set output path in editing folder
-                        output_path = str(output_dir / input_file.with_suffix(f".{output_format}").name)
-                        logger.info(f"Remuxing from Recording to Editing folder: {output_path}")
-                    except ValueError:
-                        # Not in recording folder, use same directory
-                        output_path = str(input_file.with_suffix(f".{output_format}"))
-                else:
-                    # No roles configured, use same directory
-                    output_path = str(input_file.with_suffix(f".{output_format}"))
-            except Exception as e:
-                logger.warning(f"Could not check roles for output path: {e}")
-                output_path = str(input_file.with_suffix(f".{output_format}"))
+            # Remux in the same directory as the input file
+            output_path = str(input_file.with_suffix(f".{output_format}"))
         
         # Update progress
         await self.update_progress(job_id, 10, "running")
@@ -115,12 +77,8 @@ class RemuxJob(BaseJob):
         
         output_size = os.path.getsize(output_path)
         
-        # Remove original file if we remuxed to a different location
-        # (e.g., from Recording to Editing folder)
-        remove_original = data.get("remove_original", None)
-        if remove_original is None:
-            # Auto-determine: remove if output is in different directory
-            remove_original = Path(input_path).parent != Path(output_path).parent
+        # Remove original file after successful remux (unless it's the same file)
+        remove_original = data.get("remove_original", True)  # Default to True
         
         if remove_original and input_path != output_path:
             try:
@@ -143,13 +101,15 @@ class RemuxJob(BaseJob):
             "input_path": input_path
         }
         
-        # Update job with result
+        # Update job with result and update asset's current_path
         try:
             import aiosqlite
             import json
             from datetime import datetime
             
             conn = await aiosqlite.connect("/data/db/streamops.db")
+            
+            # Update job result
             await conn.execute("""
                 UPDATE so_jobs 
                 SET result_json = ?, state = 'completed', updated_at = ?
@@ -159,6 +119,17 @@ class RemuxJob(BaseJob):
                 datetime.utcnow().isoformat(),
                 job_id
             ))
+            
+            # Update asset's current_path if we have an asset_id
+            asset_id = job_data.get("asset_id") or data.get("asset_id")
+            if asset_id:
+                await conn.execute("""
+                    UPDATE so_assets 
+                    SET current_path = ?, updated_at = datetime('now')
+                    WHERE id = ?
+                """, (output_path, asset_id))
+                logger.info(f"Updated asset {asset_id} current_path to {output_path}")
+            
             await conn.commit()
             await conn.close()
             logger.info(f"Updated job {job_id} with result in database")

@@ -42,7 +42,32 @@ class ProxyJob(BaseJob):
         job_id = job_data.get("id")
         data = job_data.get("data", {})
         
+        # Get the asset's current path from database
+        asset_id = job_data.get("asset_id") or data.get("asset_id")
         input_path = data.get("input_path")
+        
+        if asset_id:
+            # Look up the asset's current path
+            import aiosqlite
+            try:
+                conn = await aiosqlite.connect("/data/db/streamops.db")
+                cursor = await conn.execute("""
+                    SELECT current_path 
+                    FROM so_assets 
+                    WHERE id = ?
+                """, (asset_id,))
+                row = await cursor.fetchone()
+                await conn.close()
+                
+                if row and row[0]:
+                    actual_path = row[0]
+                    logger.info(f"Asset {asset_id} current_path from DB: {actual_path}")
+                    # Use the current_path from database as the input
+                    input_path = actual_path
+            except Exception as e:
+                logger.warning(f"Failed to get asset current_path: {e}")
+        
+        input_path = input_path or data.get("input_path")
         output_path = data.get("output_path")
         
         # Use values from rule, with sensible defaults only if not specified

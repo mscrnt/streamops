@@ -11,6 +11,8 @@ from app.worker.jobs.remux import RemuxJob
 from app.worker.jobs.proxy import ProxyJob
 from app.worker.jobs.transcode import TranscodeJob
 from app.worker.jobs.index import IndexJob
+from app.worker.jobs.move import MoveJob
+from app.worker.jobs.copy import CopyJob
 from app.worker.watchers.drive_watcher import DriveWatcher
 
 # Configure logging
@@ -30,6 +32,8 @@ class Worker:
             "proxy": ProxyJob(),
             "transcode": TranscodeJob(),
             "index": IndexJob(),
+            "move": MoveJob(),
+            "copy": CopyJob(),
         }
         
     async def start(self):
@@ -107,6 +111,9 @@ class Worker:
                     # Update job status to completed with ended_at timestamp
                     await self._update_job_status(job_id, "completed", result)
                     
+                    # Check if there are dependent jobs waiting for this one
+                    await self._trigger_dependent_jobs(job_id)
+                    
                     # Publish completion event
                     if self.nats:
                         await self.nats.publish_event(
@@ -171,6 +178,53 @@ class Worker:
                     # Continue processing if we can't check OBS status
         
         return True
+    
+    async def _trigger_dependent_jobs(self, completed_job_id: str):
+        """Trigger any jobs that were waiting for this one to complete"""
+        from app.api.db.database import get_db
+        
+        try:
+            db = await get_db()
+            
+            # Find jobs depending on this one (can be deferred or queued)
+            cursor = await db.execute("""
+                SELECT id, type, payload_json, asset_id 
+                FROM so_jobs 
+                WHERE depends_on = ? 
+                AND state IN ('deferred', 'queued')
+            """, (completed_job_id,))
+            
+            dependent_jobs = await cursor.fetchall()
+            
+            for job_id, job_type, payload_json, asset_id in dependent_jobs:
+                # Update job to queued state
+                await db.execute("""
+                    UPDATE so_jobs 
+                    SET state = 'queued', 
+                        blocked_reason = NULL,
+                        updated_at = datetime('now')
+                    WHERE id = ?
+                """, (job_id,))
+                
+                # Publish the job to NATS
+                if self.nats:
+                    import json
+                    payload = json.loads(payload_json) if payload_json else {}
+                    
+                    # Add the job id and asset_id to the payload
+                    payload['id'] = job_id
+                    payload['asset_id'] = asset_id
+                    
+                    await self.nats.publish_job(job_type, payload)
+                    logger.info(f"Triggered dependent job {job_id} of type {job_type}")
+            
+            await db.commit()
+            
+            if dependent_jobs:
+                logger.info(f"Triggered {len(dependent_jobs)} dependent jobs for completed job {completed_job_id}")
+                
+        except Exception as e:
+            logger.error(f"Failed to trigger dependent jobs: {e}")
     
     async def _update_job_status(self, job_id: str, status: str, result: Any):
         """Update job status in database"""

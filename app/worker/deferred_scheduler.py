@@ -86,12 +86,15 @@ class DeferredJobScheduler:
             now = datetime.utcnow()
             
             # Find deferred jobs where next_run_at has passed
+            # IMPORTANT: Only get jobs with no dependencies (depends_on IS NULL)
+            # Jobs with dependencies will be triggered when their dependency completes
             cursor = await db.execute("""
                 SELECT id, type, asset_id, payload_json, blocked_reason, 
                        attempts, next_run_at
                 FROM so_jobs 
                 WHERE state = 'deferred' 
                   AND (next_run_at IS NULL OR next_run_at <= ?)
+                  AND depends_on IS NULL
                 ORDER BY next_run_at ASC, created_at ASC
                 LIMIT 10
             """, (now.isoformat(),))
@@ -233,13 +236,11 @@ class DeferredJobScheduler:
             
             # Publish to appropriate queue
             if self.nats:
-                job_data = {
-                    'id': job_id,
-                    'type': job_type,
-                    'asset_id': asset_id,
-                    'payload': payload
-                }
-                await self.nats.publish_job(job_type, job_data)
+                # Add id and asset_id to the payload
+                payload['id'] = job_id
+                payload['asset_id'] = asset_id
+                
+                await self.nats.publish_job(job_type, payload)
                 logger.info(f"Promoted deferred job {job_id} to queue jobs.{job_type}")
             else:
                 logger.warning(f"No NATS service, job {job_id} updated but not queued")
