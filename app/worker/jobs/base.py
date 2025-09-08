@@ -84,3 +84,62 @@ class BaseJob(ABC):
                 os.remove(file)
             except Exception as e:
                 logger.warning(f"Failed to remove temp file {file}: {e}")
+    
+    async def reindex_folder_assets(self, folder_path: str):
+        """Reindex assets count for a folder path - used after move/copy/delete operations"""
+        from app.api.db.database import get_db
+        import os
+        
+        try:
+            # Normalize the folder path
+            folder_path = os.path.normpath(folder_path)
+            if os.path.isfile(folder_path):
+                folder_path = os.path.dirname(folder_path)
+            
+            logger.info(f"Reindexing assets for folder: {folder_path}")
+            
+            db = await get_db()
+            
+            # Find all media files in the folder and ensure they're indexed with correct current_path
+            if os.path.exists(folder_path) and os.path.isdir(folder_path):
+                for entry in os.listdir(folder_path):
+                    entry_path = os.path.join(folder_path, entry)
+                    if os.path.isfile(entry_path):
+                        # Check if it's a media file based on extension
+                        ext = os.path.splitext(entry)[1].lower()
+                        if ext in ['.mp4', '.mov', '.mkv', '.avi', '.webm', '.flv', '.wmv', '.m4v', '.mpg', '.mpeg']:
+                            # Check if this file is in the database
+                            cursor = await db.execute("""
+                                SELECT id, current_path FROM so_assets 
+                                WHERE abs_path = ? OR current_path = ?
+                            """, (entry_path, entry_path))
+                            
+                            row = await cursor.fetchone()
+                            if row:
+                                # Asset exists - update current_path if needed
+                                if row[1] != entry_path:
+                                    await db.execute("""
+                                        UPDATE so_assets 
+                                        SET current_path = ?, updated_at = datetime('now')
+                                        WHERE id = ?
+                                    """, (entry_path, row[0]))
+                                    logger.debug(f"Updated current_path for asset {row[0]} to {entry_path}")
+                            else:
+                                # Asset not in database - this file needs to be indexed
+                                # We can't fully index it here without media info, so just log it
+                                logger.info(f"Found unindexed media file: {entry_path}")
+                
+                await db.commit()
+            
+            # Now count the assets properly
+            cursor = await db.execute("""
+                SELECT COUNT(*) FROM so_assets 
+                WHERE current_path LIKE ? || '/%' 
+                   AND current_path NOT LIKE ? || '/%/%'
+            """, (folder_path, folder_path))
+            
+            db_count = (await cursor.fetchone())[0]
+            logger.debug(f"Folder {folder_path} has {db_count} indexed assets")
+            
+        except Exception as e:
+            logger.error(f"Failed to reindex folder {folder_path}: {e}")

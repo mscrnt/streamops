@@ -97,14 +97,15 @@ class IndexJob:
         now = datetime.utcnow().isoformat()
         
         if existing:
-            # Update existing asset
+            # Update existing asset - also set current_path if it's null
             await db.execute("""
                 UPDATE so_assets SET
                     size_bytes = ?, mtime = ?, ctime = ?,
                     hash = ?,
                     duration_s = ?, video_codec = ?, audio_codec = ?, 
                     width = ?, height = ?, fps = ?, has_audio = ?, container = ?,
-                    streams_json = ?, indexed_at = ?, updated_at = ?
+                    streams_json = ?, indexed_at = ?, updated_at = ?,
+                    current_path = COALESCE(current_path, ?)
                 WHERE id = ?
             """, (
                 file_size, file_mtime, file_ctime,
@@ -120,22 +121,24 @@ class IndexJob:
                 json.dumps({**media_info.get("streams_data", {}), "type": asset_type, "streams": media_info.get("streams", [])}),
                 now,
                 now,
+                file_path,  # Set current_path to file_path if it's null
                 asset_id
             ))
             action = "updated"
         else:
-            # Insert new asset
+            # Insert new asset - set current_path to abs_path initially
             await db.execute("""
                 INSERT INTO so_assets (
-                    id, abs_path, dir_path, filename, size_bytes, mtime, ctime,
+                    id, abs_path, current_path, dir_path, filename, size_bytes, mtime, ctime,
                     hash, duration_s, video_codec, audio_codec, 
                     width, height, fps, has_audio, container,
                     streams_json, tags_json, status, indexed_at,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 asset_id, 
                 file_path,
+                file_path,  # Set current_path to the same as abs_path initially
                 os.path.dirname(file_path),
                 os.path.basename(file_path),
                 file_size, file_mtime, file_ctime,

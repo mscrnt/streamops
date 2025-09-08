@@ -136,6 +136,15 @@ class MoveJob(BaseJob):
         except Exception as e:
             logger.error(f"Failed to update job result in database: {e}")
         
+        # Reindex both source and destination folders after move
+        source_folder = os.path.dirname(input_path)
+        dest_folder = os.path.dirname(output_path)
+        
+        logger.info(f"Reindexing folders after move: source={source_folder}, dest={dest_folder}")
+        await self.reindex_folder_assets(source_folder)
+        if source_folder != dest_folder:  # Only reindex dest if different from source
+            await self.reindex_folder_assets(dest_folder)
+        
         logger.info(f"Successfully moved to {output_path}")
         
         return result

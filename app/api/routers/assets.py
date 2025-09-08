@@ -732,9 +732,9 @@ async def delete_asset(
 ) -> dict:
     """Delete an asset and optionally its files"""
     try:
-        # Get asset info before deletion
+        # Get asset info before deletion - use current_path which tracks actual location
         cursor = await db.execute(
-            "SELECT abs_path FROM so_assets WHERE id = ?",
+            "SELECT current_path, abs_path FROM so_assets WHERE id = ?",
             (asset_id,)
         )
         row = await cursor.fetchone()
@@ -742,7 +742,9 @@ async def delete_asset(
         if not row:
             raise HTTPException(status_code=404, detail=f"Asset {asset_id} not found")
         
-        filepath = row[0]
+        # Use current_path if available, otherwise fall back to abs_path
+        filepath = row[0] if row[0] else row[1]
+        folder_path = os.path.dirname(filepath) if filepath else None
         
         # Delete from database
         await db.execute("DELETE FROM so_assets WHERE id = ?", (asset_id,))
@@ -754,6 +756,16 @@ async def delete_asset(
                 os.remove(filepath)
             except Exception as e:
                 logger.warning(f"Failed to delete physical files for asset {asset_id}: {e}")
+        
+        # Trigger folder reindexing after deletion
+        if folder_path:
+            try:
+                from app.worker.jobs.base import BaseJob
+                job = BaseJob()
+                await job.reindex_folder_assets(folder_path)
+                logger.info(f"Triggered reindex for folder {folder_path} after asset deletion")
+            except Exception as e:
+                logger.warning(f"Failed to reindex folder after deletion: {e}")
         
         return {"message": f"Asset {asset_id} deleted successfully"}
     except Exception as e:

@@ -119,6 +119,11 @@ class CopyJob(BaseJob):
         except Exception as e:
             logger.error(f"Failed to update job result in database: {e}")
         
+        # Reindex destination folder after copy
+        dest_folder = os.path.dirname(output_path)
+        logger.info(f"Reindexing destination folder after copy: {dest_folder}")
+        await self.reindex_folder_assets(dest_folder)
+        
         logger.info(f"Successfully copied to {output_path}")
         
         return result

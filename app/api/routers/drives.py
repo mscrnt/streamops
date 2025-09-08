@@ -265,10 +265,12 @@ async def get_drives_status(db=Depends(get_db)) -> List[Dict[str, Any]]:
         
         for role, drive_id, abs_path, watch in roles_rows:
             # Get asset count for this role's path
+            # Use current_path (actual location) or fall back to abs_path (original location)
             cursor = await db.execute("""
                 SELECT COUNT(*) FROM so_assets 
-                WHERE abs_path LIKE ? || '%'
-            """, (abs_path,))
+                WHERE (current_path LIKE ? || '%' OR 
+                      (current_path IS NULL AND abs_path LIKE ? || '%'))
+            """, (abs_path, abs_path))
             asset_count = (await cursor.fetchone())[0]
             
             # Store role details
