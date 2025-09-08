@@ -312,8 +312,8 @@ export default function Rules() {
               <TableBody>
                 {rules.map(rule => {
                   const ruleJson = rule.rule_json || {}
-                  const conditions = ruleJson.when || {}
-                  const actions = ruleJson.do || []
+                  const conditions = rule.when || ruleJson.when || []
+                  const actions = rule.do || ruleJson.do || []
                   
                   return (
                     <TableRow key={rule.id}>
@@ -334,25 +334,40 @@ export default function Rules() {
                       </TableCell>
                       <TableCell>
                         <div className="space-y-1">
-                          {rule.schedule ? (
-                            <Badge variant="secondary">
-                              <Clock className="h-3 w-3 mr-1" />
-                              Scheduled
+                          {/* Show trigger type */}
+                          {rule.trigger && (
+                            <Badge variant="secondary" className="mb-1">
+                              {rule.trigger.type?.replace(/_/g, ' ')}
                             </Badge>
-                          ) : (
-                            <Badge variant="secondary">
-                              Event-based
-                            </Badge>
+                          )}
+                          {/* Show conditions */}
+                          {conditions && conditions.length > 0 && (
+                            <div className="text-xs text-muted-foreground">
+                              {conditions.slice(0, 2).map((cond, idx) => (
+                                <div key={idx}>
+                                  {cond.field} {cond.op} {cond.value}
+                                </div>
+                              ))}
+                              {conditions.length > 2 && (
+                                <div>+{conditions.length - 2} more</div>
+                              )}
+                            </div>
                           )}
                         </div>
                       </TableCell>
                       <TableCell>
                         <div className="flex flex-wrap gap-1">
-                          {actions.slice(0, 3).map((action, idx) => (
-                            <Badge key={idx} variant="outline">
-                              {action.action}
-                            </Badge>
-                          ))}
+                          {actions.slice(0, 3).map((action, idx) => {
+                            // Get the action type (the key of the action object)
+                            const actionType = Object.keys(action)[0]
+                            // Format the action type for display
+                            const displayName = actionType?.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
+                            return (
+                              <Badge key={idx} variant="outline">
+                                {displayName || 'Unknown'}
+                              </Badge>
+                            )
+                          })}
                           {actions.length > 3 && (
                             <Badge variant="outline">
                               +{actions.length - 3} more
@@ -381,9 +396,9 @@ export default function Rules() {
                         </div>
                       </TableCell>
                       <TableCell>
-                        {rule.last_run ? (
+                        {rule.last_triggered ? (
                           <span className="text-sm text-muted-foreground">
-                            {formatRelativeTime(rule.last_run)}
+                            {formatRelativeTime(rule.last_triggered)}
                           </span>
                         ) : (
                           <span className="text-sm text-muted-foreground">

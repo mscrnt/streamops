@@ -274,6 +274,9 @@ class RulesEngine:
         try:
             logger.info(f"[{run_id}] Executing rule '{rule.name}'")
             
+            # Update last_triggered timestamp for this rule
+            await self._update_rule_last_triggered(rule.id)
+            
             # Initialize context with active artifact
             initial_path = Path(event_data.get("path", ""))
             if not initial_path.exists():
@@ -702,10 +705,29 @@ class RulesEngine:
         await conn.commit()
         await conn.close()
     
+    async def _update_rule_last_triggered(self, rule_id: str):
+        """Update the last_triggered timestamp for a rule"""
+        try:
+            conn = await aiosqlite.connect("/data/db/streamops.db")
+            await conn.execute("""
+                UPDATE so_rules 
+                SET last_triggered = datetime('now'), 
+                    updated_at = datetime('now')
+                WHERE id = ?
+            """, (rule_id,))
+            await conn.commit()
+            await conn.close()
+            logger.debug(f"Updated last_triggered for rule {rule_id}")
+        except Exception as e:
+            logger.error(f"Failed to update last_triggered for rule {rule_id}: {e}")
+    
     async def _create_deferred_jobs_for_rule(self, rule: 'Rule', event_data: Dict[str, Any]):
         """Create deferred jobs in database for a rule's actions"""
         logger.info(f"Starting _create_deferred_jobs_for_rule for rule {rule.name}")
         asset_id = event_data.get('asset_id', '')
+        
+        # Update last_triggered timestamp for this rule
+        await self._update_rule_last_triggered(rule.id)
         
         # Generate a unique ID for this rule execution to link jobs together
         import uuid
