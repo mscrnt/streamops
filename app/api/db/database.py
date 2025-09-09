@@ -74,6 +74,8 @@ async def create_tables() -> None:
         CREATE TABLE IF NOT EXISTS so_assets (
             id TEXT PRIMARY KEY,
             abs_path TEXT UNIQUE NOT NULL,
+            current_path TEXT,
+            parent_asset_id TEXT REFERENCES so_assets(id),
             dir_path TEXT,
             filename TEXT,
             size_bytes INTEGER,
@@ -279,6 +281,8 @@ async def create_tables() -> None:
     
     # Create indexes
     await _db.execute("CREATE INDEX IF NOT EXISTS idx_assets_path ON so_assets(abs_path)")
+    await _db.execute("CREATE INDEX IF NOT EXISTS idx_assets_current_path ON so_assets(current_path)")
+    await _db.execute("CREATE INDEX IF NOT EXISTS idx_assets_parent ON so_assets(parent_asset_id)")
     # Removed status index - column doesn't exist
     await _db.execute("CREATE INDEX IF NOT EXISTS idx_assets_created ON so_assets(created_at)")
     await _db.execute("CREATE INDEX IF NOT EXISTS idx_jobs_state ON so_jobs(state)")

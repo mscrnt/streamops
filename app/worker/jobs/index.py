@@ -93,6 +93,27 @@ class IndexJob:
         # Generate asset ID or use existing
         asset_id = existing[0] if existing else str(ULID())
         
+        # Check if this is a proxy file by filename pattern
+        parent_asset_id = None
+        filename = os.path.basename(file_path)
+        if '_proxy_' in filename:
+            # Try to find parent asset by matching the base filename
+            base_name = filename.split('_proxy_')[0]
+            # Look for parent asset with similar path
+            parent_dir = os.path.dirname(file_path)
+            cursor = await db.execute("""
+                SELECT id FROM so_assets 
+                WHERE dir_path = ? 
+                AND filename LIKE ?
+                AND parent_asset_id IS NULL
+                ORDER BY created_at DESC
+                LIMIT 1
+            """, (parent_dir, f"{base_name}%"))
+            parent_row = await cursor.fetchone()
+            if parent_row:
+                parent_asset_id = parent_row[0]
+                logger.info(f"Detected proxy file, linking to parent asset {parent_asset_id}")
+        
         # Prepare the data
         now = datetime.utcnow().isoformat()
         
@@ -129,16 +150,17 @@ class IndexJob:
             # Insert new asset - set current_path to abs_path initially
             await db.execute("""
                 INSERT INTO so_assets (
-                    id, abs_path, current_path, dir_path, filename, size_bytes, mtime, ctime,
+                    id, abs_path, current_path, parent_asset_id, dir_path, filename, size_bytes, mtime, ctime,
                     hash, duration_s, video_codec, audio_codec, 
                     width, height, fps, has_audio, container,
                     streams_json, tags_json, status, indexed_at,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 asset_id, 
                 file_path,
                 file_path,  # Set current_path to the same as abs_path initially
+                parent_asset_id,  # Link to parent if this is a proxy
                 os.path.dirname(file_path),
                 os.path.basename(file_path),
                 file_size, file_mtime, file_ctime,
@@ -151,8 +173,8 @@ class IndexJob:
                 media_info.get("fps"),
                 1 if media_info.get("audio_codec") else 0,
                 media_info.get("container"),
-                json.dumps({**media_info.get("streams_data", {}), "type": asset_type, "streams": media_info.get("streams", [])}),
-                json.dumps([]),  # Empty tags for now
+                json.dumps({**media_info.get("streams_data", {}), "type": "proxy" if parent_asset_id else asset_type, "streams": media_info.get("streams", [])}),
+                json.dumps(["proxy"] if parent_asset_id else []),  # Add proxy tag if it's a proxy
                 'ready',  # status
                 now,
                 now, now
@@ -161,8 +183,8 @@ class IndexJob:
         
         await db.commit()
         
-        # Emit asset event for recording
-        if action == "created":
+        # Emit asset event for recording (skip for proxy files)
+        if action == "created" and not parent_asset_id:
             try:
                 from app.api.services.asset_events import AssetEventService
                 await AssetEventService.emit_recorded_event(
@@ -179,8 +201,8 @@ class IndexJob:
             except Exception as e:
                 logger.debug(f"Could not emit recorded event: {e}")
         
-        # Notify about new asset via SSE
-        if action == "created":
+        # Notify about new asset via SSE (skip for proxy files)
+        if action == "created" and not parent_asset_id:
             try:
                 # Import the broadcast function from events router
                 from app.api.routers.events import notify_new_asset

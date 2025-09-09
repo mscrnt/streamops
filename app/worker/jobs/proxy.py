@@ -344,32 +344,80 @@ class ProxyJob(BaseJob):
         
         logger.info(f"Successfully created proxy: {output_path} ({output_size} bytes)")
         
-        # Emit proxy completed event
-        try:
-            # Get asset_id from job data or database
-            asset_id = None
-            if 'asset_id' in data:
-                asset_id = data['asset_id']
-            else:
-                # Try to get from database
+        # Get parent asset_id 
+        parent_asset_id = None
+        if 'asset_id' in data:
+            parent_asset_id = data['asset_id']
+        elif asset_id:
+            parent_asset_id = asset_id
+        else:
+            # Try to get from database
+            import aiosqlite
+            conn = await aiosqlite.connect("/data/db/streamops.db")
+            cursor = await conn.execute(
+                "SELECT asset_id FROM so_jobs WHERE id = ?",
+                (job_id,)
+            )
+            row = await cursor.fetchone()
+            if row and row[0]:
+                parent_asset_id = row[0]
+            await conn.close()
+        
+        # Index the proxy file as an asset with parent relationship
+        if parent_asset_id:
+            try:
                 import aiosqlite
+                import json
+                from datetime import datetime
+                from ulid import ULID
+                
+                proxy_asset_id = str(ULID())
+                now = datetime.utcnow().isoformat()
+                
                 conn = await aiosqlite.connect("/data/db/streamops.db")
-                cursor = await conn.execute(
-                    "SELECT asset_id FROM so_jobs WHERE id = ?",
-                    (job_id,)
-                )
-                row = await cursor.fetchone()
-                if row and row[0]:
-                    asset_id = row[0]
+                
+                # Create asset entry for proxy file
+                await conn.execute("""
+                    INSERT INTO so_assets (
+                        id, abs_path, current_path, parent_asset_id,
+                        dir_path, filename, size_bytes,
+                        video_codec, audio_codec, width, height,
+                        streams_json, tags_json, status,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    proxy_asset_id,
+                    output_path,
+                    output_path,
+                    parent_asset_id,  # Link to parent recording
+                    os.path.dirname(output_path),
+                    os.path.basename(output_path),
+                    output_size,
+                    video_codec_name if 'video_codec_name' in locals() else profile,
+                    audio_codec_name if 'audio_codec_name' in locals() else None,
+                    target_width if 'target_width' in locals() else None,
+                    target_height,
+                    json.dumps({"type": "proxy", "profile": profile, "resolution": f"{target_height}p"}),
+                    json.dumps(["proxy", profile]),
+                    'ready',
+                    now,
+                    now
+                ))
+                
+                await conn.commit()
                 await conn.close()
-            
-            if asset_id:
+                
+                logger.info(f"Created proxy asset {proxy_asset_id} linked to parent {parent_asset_id}")
+                
+                # Emit proxy completed event
                 from app.api.services.asset_events import AssetEventService
                 await AssetEventService.emit_proxy_completed(
-                    asset_id, job_id, output_path, profile, f"{target_height}p", output_size
+                    parent_asset_id, job_id, output_path, profile, f"{target_height}p", output_size
                 )
-        except Exception as e:
-            logger.debug(f"Could not emit proxy event: {e}")
+            except Exception as e:
+                logger.error(f"Failed to index proxy asset: {e}")
+        else:
+            logger.warning("No parent asset_id found for proxy file")
         
         # Determine output codec info for response
         if profile.startswith("h264"):

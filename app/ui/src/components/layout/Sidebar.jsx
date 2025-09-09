@@ -25,7 +25,7 @@ const navigation = [
   },
   {
     name: 'Recordings',
-    href: '/assets',
+    href: '/recordings',
     icon: FolderOpen,
   },
   {

@@ -106,6 +106,12 @@ export default function Jobs() {
       }
       
       wsRef.current.onmessage = (event) => {
+        // Skip non-JSON messages (like 'pong' responses or other plain text)
+        if (typeof event.data === 'string' && !event.data.startsWith('{') && !event.data.startsWith('[')) {
+          // Silently ignore plain text messages
+          return
+        }
+        
         try {
           const data = JSON.parse(event.data)
           
@@ -127,7 +133,7 @@ export default function Jobs() {
               break
           }
         } catch (error) {
-          console.error('WebSocket message error:', error)
+          console.error('WebSocket message error:', error, 'Data:', event.data)
         }
       }
       
@@ -789,7 +795,7 @@ export default function Jobs() {
                       <td className="p-3">
                         {job.asset_name ? (
                           <button
-                            onClick={() => navigate(`/assets?id=${job.asset_id}`)}
+                            onClick={() => navigate(`/recordings?id=${job.asset_id}`)}
                             className="text-primary hover:underline"
                           >
                             {job.asset_name}

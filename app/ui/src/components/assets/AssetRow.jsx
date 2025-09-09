@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { ChevronDown, ChevronRight, FileVideo, Package, Film, Move, AlertCircle, Clock, CheckSquare, Square, MoreVertical, Eye, Play, Volume2, Image, FileText } from 'lucide-react'
+import { ChevronDown, ChevronRight, FileVideo, Package, Film, Move, Copy, AlertCircle, Clock, CheckSquare, Square, MoreVertical, Eye, Play, Volume2, Image, FileText } from 'lucide-react'
 import { formatBytes, formatDuration, formatRelativeTime } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import { formatDistanceToNow } from 'date-fns'
@@ -8,19 +8,21 @@ import { useQuery } from '@tanstack/react-query'
 
 // Event type to icon mapping
 const EVENT_ICONS = {
-  recorded: <FileVideo className="h-3 w-3" />,
-  remux_completed: <Package className="h-3 w-3" />,
-  proxy_completed: <Film className="h-3 w-3" />,
-  move_completed: <Move className="h-3 w-3" />,
+  indexed: <FileVideo className="h-3 w-3" />,
+  remuxed: <Package className="h-3 w-3" />,
+  proxy_created: <Film className="h-3 w-3" />,
+  moved: <Move className="h-3 w-3" />,
+  copied: <Copy className="h-3 w-3" />,
   error: <AlertCircle className="h-3 w-3 text-red-500" />,
 }
 
 // Event type to color mapping
 const EVENT_COLORS = {
-  recorded: 'text-blue-500',
-  remux_completed: 'text-green-500',
-  proxy_completed: 'text-purple-500',
-  move_completed: 'text-amber-500',
+  indexed: 'text-blue-500',
+  remuxed: 'text-green-500',
+  proxy_created: 'text-purple-500',
+  moved: 'text-amber-500',
+  copied: 'text-indigo-500',
   error: 'text-red-500',
 }
 
@@ -34,67 +36,68 @@ export default function AssetRow({
   onToggleMenu 
 }) {
   const [expanded, setExpanded] = useState(false)
+  const [, forceUpdate] = useState({})
   
-  // Fetch timeline for this asset
-  const { data: timelineData } = useQuery({
-    queryKey: ['asset-timeline', asset.id],
+  // Force re-render every minute to update relative times
+  useEffect(() => {
+    const interval = setInterval(() => {
+      forceUpdate({})
+    }, 60000) // Update every 60 seconds
+    
+    return () => clearInterval(interval)
+  }, [])
+  
+  // Fetch history for this asset
+  const { data: historyData } = useQuery({
+    queryKey: ['asset-history', asset.id],
     queryFn: async () => {
-      const res = await fetch(`/api/assets/${asset.id}/timeline`)
-      if (!res.ok) throw new Error('Failed to fetch timeline')
+      const res = await fetch(`/api/assets/${asset.id}/history`)
+      if (!res.ok) throw new Error('Failed to fetch history')
       return res.json()
     },
     enabled: expanded, // Only fetch when expanded
     staleTime: 60000 // Cache for 1 minute
   })
   
-  const timeline = timelineData?.timeline || []
+  const history = historyData?.history || []
   
-  // Get the current file path (following remux and move events)
-  const getCurrentPath = () => {
-    let path = asset.filepath || asset.abs_path
-    
-    if (timeline.length > 0) {
-      // Process events chronologically to track file path changes
-      for (const event of timeline) {
-        if (event.event_type === 'remux_completed' && event.payload?.to) {
-          // Remux creates a new file at a new location
-          path = event.payload.to
-        } else if (event.event_type === 'move_completed' && event.payload?.to) {
-          // Move changes the location of the current file
-          path = event.payload.to
-        }
-      }
-    }
-    
-    return path
-  }
-  
-  const currentPath = getCurrentPath()
+  // Use the current_path from API if available, otherwise fall back to abs_path or filepath
+  const currentPath = asset.current_path || asset.filepath || asset.abs_path
+  const originalPath = asset.abs_path || asset.filepath
   const filename = currentPath?.split('/').pop() || 'Unknown'
+  const hasBeenMoved = currentPath !== originalPath
   
   const formatEventDescription = (event) => {
-    switch (event.event_type) {
-      case 'recorded':
-        return `File indexed (${formatDuration(event.payload.duration || 0)}, ${formatBytes(event.payload.size || 0)})`
-      case 'remux_completed':
-        return `Remuxed to ${event.payload.to?.split('/').pop() || 'output'}`
-      case 'proxy_completed':
-        return `Proxy created (${event.payload.profile} ${event.payload.resolution})`
-      case 'move_completed':
-        // Show meaningful path - if it's in streamops folder, show from there
-        const fullPath = event.payload.to || 'new location'
-        const streamopsIndex = fullPath.indexOf('/streamops/')
-        if (streamopsIndex !== -1) {
-          // Show path from streamops folder onward
-          return `Moved to ${fullPath.substring(streamopsIndex + '/streamops/'.length)}`
-        } else {
-          // Fallback to last 3 segments for other paths
-          return `Moved to ${fullPath.split('/').slice(-3).join('/')}`
+    switch (event.type) {
+      case 'indexed':
+        const size = event.details?.size
+        const duration = event.details?.duration
+        if (size || duration) {
+          const parts = []
+          if (duration) parts.push(formatDuration(duration))
+          if (size) parts.push(formatBytes(size))
+          return `${event.description} (${parts.join(', ')})`
         }
-      case 'error':
-        return `Error: ${event.payload.message || 'Unknown error'}`
+        return event.description
+      case 'moved':
+      case 'copied':
+        if (event.details?.location_change) {
+          return `${event.description}: ${event.details.location_change}`
+        }
+        return event.description
+      case 'proxy_created':
+        if (event.details?.proxy_file) {
+          const filename = event.details.proxy_file.split('/').pop()
+          return `${event.description}: ${filename}`
+        }
+        return event.description
+      case 'remuxed':
+        if (event.details?.to) {
+          return `${event.description} to ${event.details.to.split('/').pop()}`
+        }
+        return event.description
       default:
-        return event.event_type.replace('_', ' ')
+        return event.description || event.type.replace('_', ' ')
     }
   }
   
@@ -162,9 +165,9 @@ export default function AssetRow({
             <span className="font-medium truncate" title={currentPath}>
               {filename}
             </span>
-            {timeline.length > 0 && (
+            {history.length > 0 && (
               <span className="inline-flex items-center rounded-full px-1.5 py-0.5 text-xs font-medium bg-blue-100 text-blue-700 dark:bg-blue-950/50 dark:text-blue-300">
-                {timeline.length} {timeline.length === 1 ? 'event' : 'events'}
+                {history.length} {history.length === 1 ? 'event' : 'events'}
               </span>
             )}
           </div>
@@ -247,43 +250,45 @@ export default function AssetRow({
         </div>
       </div>
       
-      {/* Expandable timeline */}
+      {/* Expandable history */}
       {expanded && (
         <div className="px-4 py-3 bg-muted/20 border-t">
-          {timeline.length === 0 ? (
+          {history.length === 0 ? (
             <div className="text-sm text-muted-foreground ml-12">
               No events recorded yet
             </div>
           ) : (
             <div className="space-y-2 ml-12">
-              {timeline.map((event, idx) => (
+              {history.map((event, idx) => (
                 <div key={idx} className="flex items-start gap-3 text-sm">
-                  <div className={`mt-0.5 ${EVENT_COLORS[event.event_type] || 'text-muted-foreground'}`}>
-                    {EVENT_ICONS[event.event_type] || <Clock className="h-3 w-3" />}
+                  <div className={`mt-0.5 ${EVENT_COLORS[event.type] || 'text-muted-foreground'}`}>
+                    {EVENT_ICONS[event.type] || <Clock className="h-3 w-3" />}
                   </div>
                   <div className="flex-1">
                     <div className="font-medium">
                       {formatEventDescription(event)}
                     </div>
+                    {event.details?.original_path && idx === 0 && (
+                      <div className="text-muted-foreground text-xs mt-1">
+                        Original: {event.details.original_path}
+                      </div>
+                    )}
                     <div className="text-muted-foreground text-xs">
-                      {formatDistanceToNow(new Date(event.created_at), { addSuffix: true })}
-                      {event.job_id && (
-                        <span className="ml-2 opacity-50">
-                          Job: {event.job_id.slice(0, 8)}
-                        </span>
-                      )}
+                      {formatRelativeTime(event.timestamp)}
                     </div>
                   </div>
                 </div>
               ))}
               
-              {/* Show current location */}
-              <div className="mt-3 pt-3 border-t text-xs text-muted-foreground">
-                <div className="flex items-start gap-2">
-                  <span className="font-medium">Current location:</span>
-                  <span className="break-all">{currentPath}</span>
+              {/* Current location */}
+              {currentPath && (
+                <div className="mt-3 pt-3 border-t text-xs text-muted-foreground">
+                  <div className="flex items-start gap-2">
+                    <span className="font-medium">Current location:</span>
+                    <span className="break-all">{currentPath}</span>
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           )}
         </div>

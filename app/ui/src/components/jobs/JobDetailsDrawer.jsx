@@ -281,7 +281,7 @@ export default function JobDetailsDrawer({
                             <Button
                               size="sm"
                               variant="outline"
-                              onClick={() => window.location.href = `/assets?id=${job.asset_id}`}
+                              onClick={() => window.location.href = `/recordings?id=${job.asset_id}`}
                             >
                               <ExternalLink className="w-4 h-4 mr-2" />
                               Open Asset

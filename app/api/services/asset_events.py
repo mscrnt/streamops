@@ -133,6 +133,15 @@ class AssetEventService:
         return await cls.emit_event(asset_id, "move_completed", payload)
     
     @classmethod
+    async def emit_copy_completed(cls, asset_id: str, from_path: str, to_path: str) -> bool:
+        """Emit a 'copy_completed' event."""
+        payload = {
+            "from": from_path,
+            "to": to_path
+        }
+        return await cls.emit_event(asset_id, "copy_completed", payload)
+    
+    @classmethod
     async def emit_proxy_completed(cls, asset_id: str, job_id: str, output_path: str, profile: str, resolution: str, size: int) -> bool:
         """Emit a 'proxy_completed' event."""
         payload = {

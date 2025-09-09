@@ -113,6 +113,14 @@ class CopyJob(BaseJob):
                 datetime.utcnow().isoformat(),
                 job_id
             ))
+            
+            # Emit copy_completed event if we have an asset_id
+            asset_id = job_data.get("asset_id") or data.get("asset_id")
+            if asset_id:
+                from app.api.services.asset_events import AssetEventService
+                await AssetEventService.emit_copy_completed(asset_id, input_path, output_path)
+                logger.info(f"Emitted copy_completed event for asset {asset_id}")
+            
             await conn.commit()
             await conn.close()
             logger.info(f"Updated job {job_id} with result in database")

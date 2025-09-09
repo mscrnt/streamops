@@ -27,8 +27,8 @@ export default function Header() {
   const handleSearch = (e) => {
     e.preventDefault()
     if (searchQuery.trim()) {
-      // Navigate to assets page with search using React Router
-      navigate(`/assets?search=${encodeURIComponent(searchQuery)}`)
+      // Navigate to recordings page with search using React Router
+      navigate(`/recordings?search=${encodeURIComponent(searchQuery)}`)
     }
   }
 

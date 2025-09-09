@@ -818,7 +818,13 @@ async def perform_system_action(
                         try:
                             # Delete in correct order to avoid foreign key constraints
                             
-                            # 1. Delete from so_asset_events if it exists
+                            # 1. Delete child proxy assets first (they reference this asset)
+                            await db.execute(
+                                "DELETE FROM so_assets WHERE parent_asset_id = ?",
+                                (asset_id,)
+                            )
+                            
+                            # 2. Delete from so_asset_events if it exists
                             cursor = await db.execute(
                                 "SELECT name FROM sqlite_master WHERE type='table' AND name='so_asset_events'"
                             )
@@ -828,7 +834,7 @@ async def perform_system_action(
                                     (asset_id,)
                                 )
                             
-                            # 2. Delete from so_thumbs if it exists
+                            # 3. Delete from so_thumbs if it exists
                             cursor = await db.execute(
                                 "SELECT name FROM sqlite_master WHERE type='table' AND name='so_thumbs'"
                             )
@@ -838,13 +844,13 @@ async def perform_system_action(
                                     (asset_id,)
                                 )
                             
-                            # 3. Delete related jobs
+                            # 4. Delete related jobs
                             await db.execute(
                                 "DELETE FROM so_jobs WHERE asset_id = ?",
                                 (asset_id,)
                             )
                             
-                            # 4. Finally delete the asset itself
+                            # 5. Finally delete the asset itself
                             await db.execute(
                                 "DELETE FROM so_assets WHERE id = ?",
                                 (asset_id,)

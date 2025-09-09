@@ -51,13 +51,16 @@ class AssetUpdate(BaseModel):
 class AssetResponse(BaseModel):
     """Asset response"""
     id: str
-    filepath: str
+    filepath: str  # Kept for backward compatibility
+    abs_path: Optional[str] = None  # Original path where file was indexed
+    current_path: Optional[str] = None  # Current location of file
     filename: str
     asset_type: AssetType
     status: AssetStatus
     session_id: Optional[str] = None
     tags: List[str]
     metadata: AssetMetadata
+    indexed_at: Optional[datetime] = None  # When file was first indexed
     created_at: datetime
     updated_at: datetime
     

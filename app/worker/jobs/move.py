@@ -129,6 +129,10 @@ class MoveJob(BaseJob):
                     WHERE id = ?
                 """, (output_path, asset_id))
                 logger.info(f"Updated asset {asset_id} current_path to {output_path}")
+                
+                # Emit move_completed event for history tracking
+                from app.api.services.asset_events import AssetEventService
+                await AssetEventService.emit_move_completed(asset_id, input_path, output_path)
             
             await conn.commit()
             await conn.close()

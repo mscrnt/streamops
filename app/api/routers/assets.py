@@ -61,7 +61,8 @@ async def list_assets(
 ) -> AssetListResponse:
     """List assets with filtering, search, and pagination"""
     try:
-        query = "SELECT * FROM so_assets a WHERE 1=1"
+        # Exclude proxy files (those with parent_asset_id set) from main listings
+        query = "SELECT * FROM so_assets a WHERE parent_asset_id IS NULL"
         params = []
         
         if status:
@@ -143,15 +144,22 @@ async def list_assets(
                 "container": row[15]
             }
             
+            # Get current_path (index 22) or fall back to abs_path (index 1)
+            current_path = row[22] if len(row) > 22 and row[22] else row[1]
+            indexed_at = row[19] if len(row) > 19 and row[19] else row[20]
+            
             assets.append(AssetResponse(
                 id=row[0],
-                filepath=row[1],
-                filename=os.path.basename(row[1]) if row[1] else "Unknown",
+                filepath=row[1],  # Keep as original path for compatibility
+                abs_path=row[1],  # Original path where file was indexed
+                current_path=current_path,  # Current location of file
+                filename=os.path.basename(current_path) if current_path else "Unknown",
                 asset_type=AssetType(streams.get('type', 'video')) if isinstance(streams, dict) else AssetType('video'),
                 status=AssetStatus(row[18]),
                 session_id=tags.get('session_id') if isinstance(tags, dict) else None,
                 tags=tags if isinstance(tags, list) else [],
                 metadata=metadata,
+                indexed_at=indexed_at,
                 created_at=datetime.fromisoformat(row[20]) if row[20] else datetime.utcnow(),
                 updated_at=datetime.fromisoformat(row[21]) if row[21] else datetime.utcnow()
             ))
@@ -746,7 +754,17 @@ async def delete_asset(
         filepath = row[0] if row[0] else row[1]
         folder_path = os.path.dirname(filepath) if filepath else None
         
-        # Delete from database
+        # Delete in correct order to handle foreign key constraints
+        # 1. Delete child proxy assets first
+        await db.execute("DELETE FROM so_assets WHERE parent_asset_id = ?", (asset_id,))
+        
+        # 2. Delete related jobs
+        await db.execute("DELETE FROM so_jobs WHERE asset_id = ?", (asset_id,))
+        
+        # 3. Delete asset events
+        await db.execute("DELETE FROM so_asset_events WHERE asset_id = ?", (asset_id,))
+        
+        # 4. Finally delete the asset itself
         await db.execute("DELETE FROM so_assets WHERE id = ?", (asset_id,))
         await db.commit()
         
@@ -772,6 +790,235 @@ async def delete_asset(
         raise HTTPException(status_code=500, detail=f"Failed to delete asset: {str(e)}")
 
 
+
+
+@router.get("/{asset_id}/history")
+async def get_asset_history(
+    asset_id: str,
+    db=Depends(get_db)
+) -> dict:
+    """Get the complete history of an asset including movements and operations"""
+    try:
+        # Get asset basic info
+        cursor = await db.execute("""
+            SELECT abs_path, current_path, indexed_at, created_at
+            FROM so_assets 
+            WHERE id = ?
+        """, (asset_id,))
+        
+        row = await cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Asset not found")
+        
+        abs_path, current_path, indexed_at, created_at = row
+        
+        # Get all jobs for this asset to get move/copy details
+        cursor = await db.execute("""
+            SELECT type, payload_json, result_json, finished_at
+            FROM so_jobs
+            WHERE asset_id = ? AND state = 'completed'
+            ORDER BY finished_at ASC
+        """, (asset_id,))
+        
+        job_events = []
+        async for job_row in cursor:
+            job_type, payload_json, result_json, finished_at = job_row
+            payload = json.loads(payload_json) if payload_json else {}
+            result = json.loads(result_json) if result_json else {}
+            
+            if job_type == 'move' and finished_at:
+                # Try different field names that might contain the paths
+                source = payload.get('source_path') or payload.get('input_path', '')
+                dest = payload.get('dest_path') or payload.get('target_path', '')
+                job_events.append({
+                    "type": "moved",
+                    "timestamp": finished_at,
+                    "description": f"File moved",
+                    "details": {
+                        "location_change": f"{source} → {dest}"
+                    }
+                })
+            elif job_type == 'copy' and finished_at:
+                # Try different field names that might contain the paths
+                source = payload.get('source_path') or payload.get('input_path', '')
+                dest = payload.get('dest_path') or payload.get('target_path', '')
+                job_events.append({
+                    "type": "copied",
+                    "timestamp": finished_at,
+                    "description": f"File copied",
+                    "details": {
+                        "location_change": f"{source} → {dest}"
+                    }
+                })
+        
+        # Get all events for this asset to build history
+        cursor = await db.execute("""
+            SELECT event_type, created_at, payload_json, job_id
+            FROM so_asset_events
+            WHERE asset_id = ?
+            ORDER BY created_at ASC
+        """, (asset_id,))
+        
+        events = []
+        
+        # Always add initial indexing event at the top
+        events.append({
+            "type": "indexed",
+            "timestamp": indexed_at or created_at,
+            "description": "File indexed",
+            "details": {
+                "original_path": abs_path
+            }
+        })
+        
+        async for event_row in cursor:
+            event_type, event_time, payload_json, job_id = event_row
+            payload = json.loads(payload_json) if payload_json else {}
+            
+            # Skip recorded events as we handle indexing at the top
+            if event_type == 'recorded':
+                continue
+            elif event_type == 'move_completed':
+                events.append({
+                    "type": "moved",
+                    "timestamp": event_time,
+                    "description": f"File moved",
+                    "details": {
+                        "location_change": f"{payload.get('from', '')} → {payload.get('to', '')}"
+                    }
+                })
+            elif event_type == 'remux_completed':
+                events.append({
+                    "type": "remuxed",
+                    "timestamp": event_time,
+                    "description": "File remuxed",
+                    "details": {
+                        "from": payload.get("from"),
+                        "to": payload.get("to"),
+                        "size": payload.get("size")
+                    }
+                })
+            elif event_type == 'proxy_completed':
+                # Get the actual proxy file path from the database
+                proxy_cursor = await db.execute("""
+                    SELECT current_path, abs_path
+                    FROM so_assets
+                    WHERE parent_asset_id = ?
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                """, (asset_id,))
+                proxy_row = await proxy_cursor.fetchone()
+                proxy_path = proxy_row[0] or proxy_row[1] if proxy_row else payload.get("output")
+                
+                events.append({
+                    "type": "proxy_created",
+                    "timestamp": event_time,
+                    "description": f"Proxy file created",
+                    "details": {
+                        "proxy_file": proxy_path,
+                        "profile": payload.get("profile"),
+                        "resolution": payload.get("resolution"),
+                        "size": payload.get("size")
+                    }
+                })
+            elif event_type == 'copy_completed':
+                events.append({
+                    "type": "copied",
+                    "timestamp": event_time,
+                    "description": "File copied",
+                    "details": {
+                        "location_change": f"{payload.get('from', '')} → {payload.get('to', '')}"
+                    }
+                })
+        
+        # Add job events if we found any
+        for job_event in job_events:
+            # Check if we don't already have this event from asset_events
+            if not any(e["type"] == job_event["type"] and 
+                      abs(datetime.fromisoformat(e["timestamp"]).timestamp() - 
+                          datetime.fromisoformat(job_event["timestamp"]).timestamp()) < 60 
+                      for e in events if e["timestamp"]):
+                events.append(job_event)
+        
+        # Sort events by timestamp (keep indexed at top)
+        indexed_event = events[0] if events else None
+        other_events = events[1:] if len(events) > 1 else []
+        
+        # Sort other events by timestamp, parsing different formats
+        def parse_timestamp(ts):
+            if not ts:
+                return datetime.min
+            try:
+                # Try parsing ISO format with microseconds
+                if 'T' in ts:
+                    return datetime.fromisoformat(ts.replace('Z', '+00:00'))
+                # Try parsing space-separated format
+                else:
+                    return datetime.fromisoformat(ts)
+            except:
+                return datetime.min
+        
+        other_events = sorted(other_events, key=lambda x: parse_timestamp(x.get("timestamp")))
+        
+        # Reconstruct events list with indexed at top
+        if indexed_event:
+            events = [indexed_event] + other_events
+        else:
+            events = other_events
+        
+        return {
+            "asset_id": asset_id,
+            "original_path": abs_path,
+            "current_path": current_path,
+            "history": events
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get asset history: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{asset_id}/proxies")
+async def get_asset_proxies(
+    asset_id: str,
+    db=Depends(get_db)
+) -> list:
+    """Get all proxy files for an asset"""
+    try:
+        # Get proxy files for this asset
+        cursor = await db.execute("""
+            SELECT id, abs_path, current_path, filename, size_bytes,
+                   video_codec, width, height, streams_json, status,
+                   created_at, updated_at
+            FROM so_assets 
+            WHERE parent_asset_id = ?
+            ORDER BY created_at DESC
+        """, (asset_id,))
+        
+        rows = await cursor.fetchall()
+        
+        proxies = []
+        for row in rows:
+            streams = json.loads(row[8]) if row[8] else {}
+            proxies.append({
+                "id": row[0],
+                "path": row[2] or row[1],  # Use current_path if available
+                "filename": row[3],
+                "size": row[4],
+                "codec": row[5],
+                "resolution": f"{row[7]}p" if row[7] else None,
+                "profile": streams.get("profile"),
+                "status": row[9],
+                "created_at": row[10],
+                "updated_at": row[11]
+            })
+        
+        return proxies
+    except Exception as e:
+        logger.error(f"Failed to get proxies for asset {asset_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/{asset_id}/process")
@@ -1175,13 +1422,13 @@ async def get_asset_detail(
     """Get detailed asset information including recent jobs."""
     
     try:
-        # Get asset details
+        # Get asset details including both original and current paths
         cursor = await db.execute("""
             SELECT 
-                id, abs_path, size, status, 
-                duration_sec, container, video_codec, audio_codec,
+                id, abs_path, size_bytes, status, 
+                duration_s, container, video_codec, audio_codec,
                 width, height, fps, created_at, updated_at, tags_json,
-                streams_json, drive_hint, mtime, ctime, hash_xxh64, hash_sha256
+                streams_json, current_path, indexed_at, mtime, ctime, hash
             FROM so_assets
             WHERE id = ?
         """, (asset_id,))
@@ -1190,14 +1437,22 @@ async def get_asset_detail(
         if not row:
             raise HTTPException(status_code=404, detail="Asset not found")
         
-        # Extract filename from path
+        # Extract filenames from paths
         abs_path = row[1]
-        name = Path(abs_path).name if abs_path else "Unknown"
+        current_path = row[15] if row[15] else abs_path  # Use abs_path if current_path is null
+        name = Path(current_path).name if current_path else "Unknown"
+        original_name = Path(abs_path).name if abs_path else "Unknown"
+        
+        # Determine if file has been moved
+        has_moved = current_path and current_path != abs_path
         
         asset = {
             "id": row[0],
             "name": name,
-            "abs_path": abs_path,
+            "abs_path": abs_path,  # Original path where file was first indexed
+            "current_path": current_path,  # Current location of the file
+            "original_name": original_name,  # Original filename
+            "has_moved": has_moved,  # Whether file has been moved from original location
             "size": row[2],
             "status": row[3],
             "duration_sec": row[4],
@@ -1209,22 +1464,21 @@ async def get_asset_detail(
             "fps": row[10],
             "created_at": row[11],
             "updated_at": row[12],
+            "indexed_at": row[16] if row[16] else row[11],  # Use indexed_at if available, else created_at
             "tags": json.loads(row[13]) if row[13] else [],
             "streams": json.loads(row[14]) if row[14] else [],
-            "drive_hint": row[15],
-            "mtime": row[16],
-            "ctime": row[17],
-            "hash_xxh64": row[18],
-            "hash_sha256": row[19],
+            "mtime": row[17],
+            "ctime": row[18],
+            "hash": row[19],
             "asset_type": "video" if row[6] else "unknown"
         }
         
         # Get recent jobs for this asset
         cursor = await db.execute("""
-            SELECT id, type, state, started_at, ended_at,
+            SELECT id, type, state, started_at, finished_at,
                    CASE 
-                       WHEN ended_at IS NOT NULL AND started_at IS NOT NULL 
-                       THEN (julianday(ended_at) - julianday(started_at)) * 86400
+                       WHEN finished_at IS NOT NULL AND started_at IS NOT NULL 
+                       THEN (julianday(finished_at) - julianday(started_at)) * 86400
                        ELSE NULL 
                    END as duration_sec
             FROM so_jobs
@@ -1542,43 +1796,6 @@ async def get_asset_path(
 
 
 
-@router.get("/{asset_id}/timeline")
-async def get_asset_timeline(
-    asset_id: str,
-    db=Depends(get_db)
-):
-    """Get timeline of events for an asset."""
-    try:
-        from app.api.services.asset_events import AssetEventService
-        
-        # Get asset info
-        cursor = await db.execute(
-            "SELECT * FROM so_assets WHERE id = ?", 
-            (asset_id,)
-        )
-        asset = await cursor.fetchone()
-        
-        if not asset:
-            raise HTTPException(status_code=404, detail="Asset not found")
-        
-        # Get timeline events
-        timeline = await AssetEventService.get_asset_timeline(asset_id)
-        
-        # Convert asset row to dict
-        columns = [col[0] for col in cursor.description]
-        asset_dict = dict(zip(columns, asset))
-        
-        return {
-            "asset": asset_dict,
-            "timeline": timeline
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to get asset timeline: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
 
 @router.get("/{asset_id}/stream")
 async def stream_asset_video(
@@ -1587,56 +1804,28 @@ async def stream_asset_video(
 ):
     """Stream video file directly from current location."""
     try:
-        from app.api.services.asset_events import AssetEventService
-        
-        # Get asset info
+        # Get asset info including current_path
         cursor = await db.execute(
-            "SELECT * FROM so_assets WHERE id = ?", 
+            "SELECT abs_path, current_path FROM so_assets WHERE id = ?", 
             (asset_id,)
         )
-        asset = await cursor.fetchone()
+        row = await cursor.fetchone()
         
-        if not asset:
+        if not row:
             raise HTTPException(status_code=404, detail="Asset not found")
         
-        # Convert to dict
-        columns = [col[0] for col in cursor.description]
-        asset_dict = dict(zip(columns, asset))
+        abs_path, current_path = row
         
-        # Get current file path from timeline
-        timeline = await AssetEventService.get_asset_timeline(asset_id)
-        original_path = asset_dict.get('abs_path') or asset_dict.get('filepath')
-        proxy_path = None
-        current_path = original_path
+        # Use current_path if available, otherwise fall back to abs_path
+        file_path_str = current_path if current_path else abs_path
         
-        # Check timeline for proxy and move events
-        for event in reversed(timeline):
-            if event['event_type'] == 'proxy_completed' and event.get('payload', {}).get('output_path'):
-                proxy_path = event['payload']['output_path']
-            elif event['event_type'] == 'move_completed' and event.get('payload', {}).get('to'):
-                # Update the original path if it was moved
-                if not proxy_path or event['payload'].get('from') != proxy_path:
-                    current_path = event['payload']['to']
+        if not file_path_str:
+            raise HTTPException(status_code=404, detail="File path not found")
         
-        # Try proxy first, then fall back to original
-        file_path = None
-        used_proxy = False
-        
-        if proxy_path:
-            proxy_file = Path(proxy_path)
-            if proxy_file.exists():
-                file_path = proxy_file
-                used_proxy = True
-                logger.info(f"Using proxy file for streaming: {proxy_path}")
-        
-        if not file_path:
-            if not current_path:
-                raise HTTPException(status_code=404, detail="File path not found")
-            
-            file_path = Path(current_path)
-            if not file_path.exists():
-                logger.warning(f"File not found at {file_path}, asset may have moved")
-                raise HTTPException(status_code=404, detail=f"File not found at {current_path}")
+        file_path = Path(file_path_str)
+        if not file_path.exists():
+            logger.warning(f"File not found at {file_path}, asset may have been deleted")
+            raise HTTPException(status_code=404, detail=f"File not found at {file_path_str}")
         
         # Determine content type based on file extension
         ext = file_path.suffix.lower()
@@ -1680,56 +1869,33 @@ async def get_stream_info(
 ):
     """Check if video can be streamed and get info."""
     try:
-        from app.api.services.asset_events import AssetEventService
-        
-        # Get asset info
+        # Get asset info including current_path
         cursor = await db.execute(
-            "SELECT * FROM so_assets WHERE id = ?", 
+            "SELECT abs_path, current_path FROM so_assets WHERE id = ?", 
             (asset_id,)
         )
-        asset = await cursor.fetchone()
+        row = await cursor.fetchone()
         
-        if not asset:
+        if not row:
             raise HTTPException(status_code=404, detail="Asset not found")
         
-        # Convert to dict
-        columns = [col[0] for col in cursor.description]
-        asset_dict = dict(zip(columns, asset))
+        abs_path, current_path = row
         
-        # Get current file path from timeline
-        timeline = await AssetEventService.get_asset_timeline(asset_id)
-        original_path = asset_dict.get('abs_path') or asset_dict.get('filepath')
-        proxy_path = None
-        current_path = original_path
+        # Use current_path if available, otherwise fall back to abs_path
+        file_path_str = current_path if current_path else abs_path
         
-        # Check timeline for proxy and move events
-        for event in reversed(timeline):
-            if event['event_type'] == 'proxy_completed' and event.get('payload', {}).get('output_path'):
-                proxy_path = event['payload']['output_path']
-            elif event['event_type'] == 'move_completed' and event.get('payload', {}).get('to'):
-                # Update the original path if it was moved
-                if not proxy_path or event['payload'].get('from') != proxy_path:
-                    current_path = event['payload']['to']
+        if not file_path_str:
+            raise HTTPException(status_code=404, detail="File path not found")
         
-        # Check if proxy exists
-        has_proxy = False
-        file_to_use = None
-        
-        if proxy_path and Path(proxy_path).exists():
-            has_proxy = True
-            file_to_use = Path(proxy_path)
-        elif current_path and Path(current_path).exists():
-            file_to_use = Path(current_path)
-        else:
+        file_to_use = Path(file_path_str)
+        if not file_to_use.exists():
             raise HTTPException(status_code=404, detail="File not found")
         
         return {
             "can_stream": True,
             "path": str(file_to_use),
             "size": file_to_use.stat().st_size,
-            "content_type": "video/mp4",
-            "has_proxy": has_proxy,
-            "using_proxy": has_proxy
+            "content_type": "video/mp4"
         }
         
     except HTTPException:

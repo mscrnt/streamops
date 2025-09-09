@@ -170,13 +170,13 @@ export default function RecentAssetsList({ assets, loading, onViewAll }) {
                 <div 
                   key={asset.id}
                   className="flex items-start space-x-3 p-3 rounded-lg border bg-card hover:bg-accent/50 cursor-pointer transition-colors"
-                  onClick={() => navigate(`/assets/${asset.id}`)}
+                  onClick={() => navigate(`/recordings/${asset.id}`)}
                   role="button"
                   tabIndex={0}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault()
-                      navigate(`/assets/${asset.id}`)
+                      navigate(`/recordings/${asset.id}`)
                     }
                   }}
                 >
@@ -242,7 +242,7 @@ export default function RecentAssetsList({ assets, loading, onViewAll }) {
                             className="h-8 w-8"
                             onClick={(e) => {
                               e.stopPropagation()
-                              navigate(`/assets/${asset.id}/play`)
+                              navigate(`/recordings/${asset.id}/play`)
                             }}
                             aria-label="Play asset"
                           >
@@ -255,7 +255,7 @@ export default function RecentAssetsList({ assets, loading, onViewAll }) {
                           className="h-8 w-8"
                           onClick={(e) => {
                             e.stopPropagation()
-                            navigate(`/assets/${asset.id}`)
+                            navigate(`/recordings/${asset.id}`)
                           }}
                           aria-label="View details"
                         >
@@ -318,7 +318,7 @@ export default function RecentAssetsList({ assets, loading, onViewAll }) {
               </Button>
               <Button 
                 variant="outline"
-                onClick={() => navigate('/assets')}
+                onClick={() => navigate('/recordings')}
               >
                 View All Recordings
               </Button>

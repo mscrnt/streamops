@@ -30,54 +30,12 @@ export default function AssetPreviewDrawer({ assetId, onClose, onAction }) {
     enabled: !!assetId
   })
   
-  // Fetch timeline to get current file location
-  const { data: timelineData } = useQuery({
-    queryKey: ['asset-timeline', assetId],
-    queryFn: async () => {
-      const res = await fetch(`/api/assets/${assetId}/timeline`)
-      if (!res.ok) throw new Error('Failed to fetch timeline')
-      return res.json()
-    },
-    enabled: !!assetId
-  })
-  
-  // Fetch asset path
-  const { data: pathData } = useQuery({
-    queryKey: ['asset-path', assetId],
-    queryFn: async () => {
-      const response = await api.get(`/assets/${assetId}/path`)
-      return response.data
-    },
-    enabled: !!assetId
-  })
-  
   const asset = assetData?.asset
   const thumbs = assetData?.thumbs
   const recentJobs = assetData?.jobs_recent || []
-  const timeline = timelineData?.timeline || []
   
-  // Get current file path from timeline (checking remux and move events)
-  const getCurrentPath = () => {
-    let path = asset?.abs_path || asset?.filepath
-    
-    if (timeline.length > 0) {
-      // Process events chronologically to track file path changes
-      // This ensures we follow the actual sequence: original -> remux -> move
-      for (const event of timeline) {
-        if (event.event_type === 'remux_completed' && event.payload?.to) {
-          // Remux creates a new file at a new location
-          path = event.payload.to
-        } else if (event.event_type === 'move_completed' && event.payload?.to) {
-          // Move changes the location of the current file
-          path = event.payload.to
-        }
-      }
-    }
-    
-    return path
-  }
-  
-  const currentPath = getCurrentPath()
+  // Use current_path if available, otherwise fall back to abs_path or filepath
+  const currentPath = asset?.current_path || asset?.filepath || asset?.abs_path
   const currentFilename = currentPath ? currentPath.split('/').pop() : (asset?.name || 'Unknown')
   
   // Determine current container format based on file extension
@@ -148,7 +106,7 @@ export default function AssetPreviewDrawer({ assetId, onClose, onAction }) {
               </h2>
               {currentPath && currentPath !== asset?.abs_path && (
                 <p className="text-xs text-muted-foreground mt-1">
-                  Updated location after {timeline.some(e => e.event_type === 'remux_completed') ? 'remux/move' : 'move'}
+                  File has been moved from original location
                 </p>
               )}
             </div>
@@ -385,25 +343,7 @@ export default function AssetPreviewDrawer({ assetId, onClose, onAction }) {
                               </>
                             )}
                           </Button>
-                          {pathData?.can_open_on_host && (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => {
-                                // Would open folder if supported
-                                toast.info('Opening folder not yet supported')
-                              }}
-                            >
-                              <ExternalLink className="w-4 h-4 mr-2" />
-                              Open Folder
-                            </Button>
-                          )}
                         </div>
-                        {pathData?.host_hint && (
-                          <p className="text-xs text-muted-foreground">
-                            This is your host path. Paste into Explorer/Finder to open the folder.
-                          </p>
-                        )}
                       </div>
                     </div>
                     

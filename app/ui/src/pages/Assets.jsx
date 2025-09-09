@@ -43,6 +43,7 @@ export default function Assets() {
   const [videoPlayerAssetId, setVideoPlayerAssetId] = useState(null)
   const [localSearch, setLocalSearch] = useState(search)
   const [activeMenuId, setActiveMenuId] = useState(null)
+  const [isRefreshing, setIsRefreshing] = useState(false)
   
   // Close menu when clicking outside
   useEffect(() => {
@@ -69,15 +70,25 @@ export default function Assets() {
   }, [search, types, status, tags, sort, page, perPage])
   
   // Fetch assets
-  const { data: assetsData, isLoading, error, refetch } = useQuery({
+  const { data: assetsData, isLoading, error, refetch, isFetching } = useQuery({
     queryKey: ['assets', queryParams],
     queryFn: async () => {
       const response = await api.get(`/assets/?${queryParams}`)
       return response.data
     },
     keepPreviousData: true,
-    staleTime: 10000
+    staleTime: 1000, // Reduce stale time to 1 second
+    refetchOnWindowFocus: false
   })
+  
+  // Auto-refresh every minute to update relative times
+  useEffect(() => {
+    const interval = setInterval(() => {
+      queryClient.invalidateQueries(['assets', queryParams])
+    }, 60000) // Refresh every 60 seconds
+    
+    return () => clearInterval(interval)
+  }, [queryClient, queryParams])
   
   // Action mutations
   const actionMutation = useMutation({
@@ -143,6 +154,11 @@ export default function Assets() {
     updateParams({ sort: newSort })
   }, [updateParams])
   
+  const handleRefresh = useCallback(async () => {
+    // Invalidate the cache and refetch
+    await queryClient.invalidateQueries(['assets', queryParams])
+    refetch()
+  }, [queryClient, queryParams, refetch])
   
   const handlePageChange = useCallback((newPage) => {
     updateParams({ page: newPage.toString() })
@@ -362,10 +378,10 @@ export default function Assets() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => refetch()}
-              disabled={isLoading}
+              onClick={handleRefresh}
+              disabled={isFetching}
             >
-              <RefreshCw className={cn("w-4 h-4", isLoading && "animate-spin")} />
+              <RefreshCw className={cn("w-4 h-4", isFetching && "animate-spin")} />
             </Button>
           </div>
         </div>

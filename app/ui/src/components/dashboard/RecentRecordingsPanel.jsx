@@ -107,12 +107,12 @@ export default function RecentRecordingsPanel() {
   }
   
   const handleOpen = (asset) => {
-    navigate(`/assets/${asset.id}`)
+    navigate(`/recordings/${asset.id}`)
   }
   
   const handleLocate = (asset) => {
     const filename = asset.abs_path?.split('/').pop() || ''
-    navigate(`/assets?search=${encodeURIComponent(filename)}`)
+    navigate(`/recordings?search=${encodeURIComponent(filename)}`)
   }
   
   return (
@@ -129,7 +129,7 @@ export default function RecentRecordingsPanel() {
           >
             <RefreshCw className="h-4 w-4" />
           </Button>
-          <Link to="/assets?filter=recording&sort=created_at:desc">
+          <Link to="/recordings?filter=recording&sort=created_at:desc">
             <Button variant="ghost" size="sm">
               View All
             </Button>
