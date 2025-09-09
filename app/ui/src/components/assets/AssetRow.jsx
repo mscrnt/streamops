@@ -33,7 +33,8 @@ export default function AssetRow({
   onPreview, 
   onAction,
   showMenu,
-  onToggleMenu 
+  onToggleMenu,
+  hideCheckbox = false
 }) {
   const [expanded, setExpanded] = useState(false)
   const [, forceUpdate] = useState({})
@@ -127,26 +128,30 @@ export default function AssetRow({
         onClick={handleRowClick}
       >
         {/* Checkbox */}
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            onToggleSelect(asset.id)
-          }}
-          className="flex-shrink-0"
-        >
-          {selected ? (
-            <CheckSquare className="w-5 h-5 text-primary" />
-          ) : (
-            <Square className="w-5 h-5 text-muted-foreground" />
-          )}
-        </button>
+        {!hideCheckbox && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              onToggleSelect(asset.id)
+            }}
+            className="flex-shrink-0"
+          >
+            {selected ? (
+              <CheckSquare className="w-5 h-5 text-primary" />
+            ) : (
+              <Square className="w-5 h-5 text-muted-foreground" />
+            )}
+          </button>
+        )}
         
         {/* Expand chevron */}
         <button
-          className="flex-shrink-0"
+          className="flex-shrink-0 focus:outline-none"
           onClick={(e) => {
             e.stopPropagation()
             setExpanded(!expanded)
+            // Remove focus after click
+            e.currentTarget.blur()
           }}
         >
           {expanded ? (
