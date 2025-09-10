@@ -10,6 +10,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+from app.api.services.filesystem_service import FilesystemService
 from app.api.schemas.drives import (
     DriveResponse, DriveCreate, DriveUpdate, DriveListResponse, DriveSearchQuery,
     DriveStats, DriveActivity, DriveActivityResponse, DriveTest, DriveTestResult,
@@ -266,10 +267,12 @@ async def get_drives_status(db=Depends(get_db)) -> List[Dict[str, Any]]:
         for role, drive_id, abs_path, watch in roles_rows:
             # Get asset count for this role's path
             # Use current_path (actual location) or fall back to abs_path (original location)
+            # Exclude proxy files (those with parent_asset_id)
             cursor = await db.execute("""
                 SELECT COUNT(*) FROM so_assets 
                 WHERE (current_path LIKE ? || '%' OR 
                       (current_path IS NULL AND abs_path LIKE ? || '%'))
+                  AND parent_asset_id IS NULL
             """, (abs_path, abs_path))
             asset_count = (await cursor.fetchone())[0]
             
@@ -544,7 +547,7 @@ async def assign_role(
             drive_label = env_drive["label"]
         
         # Safely join paths
-        abs_path = safe_join(drive_path, request.subpath)
+        abs_path = FilesystemService.safe_join(drive_path, request.subpath)
         if abs_path is None:
             raise HTTPException(status_code=400, detail="Invalid path (traversal detected)")
         
@@ -568,7 +571,7 @@ async def assign_role(
             raise HTTPException(status_code=400, detail="Path exists but is not a directory")
         
         # Check writability
-        writable = check_directory_writable(abs_path)
+        writable = FilesystemService.check_directory_writable(abs_path)
         
         # Validate write requirements for certain roles
         write_required_roles = ["recording", "editing", "archive"]
@@ -653,7 +656,7 @@ async def get_role_assignments(db=Depends(get_db)) -> RolesResponse:
             
             # Check current status
             exists = os.path.exists(abs_path) if abs_path else False
-            writable = check_directory_writable(abs_path) if exists else False
+            writable = FilesystemService.check_directory_writable(abs_path) if exists else False
             
             roles_dict[role] = RoleAssignment(
                 role=role,
@@ -1602,28 +1605,7 @@ async def _scan_drive(drive_id: str, force_rescan: bool):
 
 # Role assignment endpoints
 
-def safe_join(base: str, relative: str) -> Optional[str]:
-    """Safely join paths, preventing directory traversal"""
-    base = os.path.abspath(base)
-    if not relative or relative == ".":
-        return base
-    relative = relative.lstrip("/\\")
-    joined = os.path.abspath(os.path.join(base, relative))
-    if not joined.startswith(base):
-        return None
-    return joined
-
-
-def check_directory_writable(path: str) -> bool:
-    """Check if directory is writable"""
-    try:
-        test_file = os.path.join(path, f".streamops_test_{os.getpid()}")
-        with open(test_file, 'w') as f:
-            f.write("test")
-        os.unlink(test_file)
-        return True
-    except:
-        return False
+# Filesystem utilities moved to FilesystemService
 
 
 async def resolve_role_path(role: RoleType, db) -> Optional[str]:

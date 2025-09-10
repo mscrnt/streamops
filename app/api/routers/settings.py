@@ -92,8 +92,8 @@ async def reset_settings_section(section: str) -> Dict[str, Any]:
 
 
 @router.post("/guardrails/apply")
-async def apply_guardrails(request: GuardrailApplyRequest) -> Dict[str, Any]:
-    """Apply guardrail settings immediately"""
+async def apply_guardrails_settings(request: GuardrailApplyRequest) -> Dict[str, Any]:
+    """Apply guardrail settings immediately from settings page"""
     try:
         guardrails = request.dict()
         await apply_guardrails_internal(guardrails)

@@ -697,54 +697,7 @@ async def get_gpu_info(refresh: bool = Query(False, description="Force refresh G
         raise HTTPException(status_code=500, detail=f"Failed to get GPU info: {str(e)}")
 
 
-@router.get("/metrics")
-async def get_system_metrics(
-    window: str = Query("5m", description="Time window (5m, 15m, 1h)"),
-    step: str = Query("5s", description="Sample step (5s, 30s, 1m)"),
-    db=Depends(get_db)
-) -> Dict[str, Any]:
-    """Get time-series metrics for sparkline charts"""
-    try:
-        # This would ideally query from a time-series database
-        # For now, return current values repeated
-        from datetime import datetime, timedelta
-        
-        # Parse window and step
-        window_map = {"5m": 5, "15m": 15, "1h": 60}
-        step_map = {"5s": 5, "30s": 30, "1m": 60}
-        
-        window_minutes = window_map.get(window, 5)
-        step_seconds = step_map.get(step, 5)
-        
-        num_points = (window_minutes * 60) // step_seconds
-        now = datetime.utcnow()
-        
-        # Generate sample data points
-        cpu_data = []
-        memory_data = []
-        gpu_data = []
-        queue_data = []
-        
-        for i in range(num_points):
-            timestamp = (now - timedelta(seconds=i*step_seconds)).isoformat()
-            # Add some variation to make it look realistic
-            cpu_data.append({"t": timestamp, "v": psutil.cpu_percent(interval=0) + (i % 3)})
-            memory_data.append({"t": timestamp, "v": psutil.virtual_memory().percent})
-            
-        # Reverse to have oldest first
-        cpu_data.reverse()
-        memory_data.reverse()
-        
-        return {
-            "cpu": cpu_data,
-            "memory": memory_data,
-            "gpu": gpu_data,
-            "queue_depth": queue_data
-        }
-        
-    except Exception as e:
-        logger.error(f"Failed to get system metrics: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to get system metrics: {str(e)}")
+# Duplicate get_system_metrics removed - using the one defined at line 169
 
 
 @router.post("/actions")
@@ -801,9 +754,9 @@ async def perform_system_action(
                 )
                 drives = await cursor.fetchall()
                 
-                # Get all existing assets
+                # Get all existing assets with both original and current paths
                 cursor = await db.execute(
-                    "SELECT id, abs_path FROM so_assets"
+                    "SELECT id, abs_path, current_path FROM so_assets"
                 )
                 assets = await cursor.fetchall()
                 
@@ -811,10 +764,28 @@ async def perform_system_action(
                 removed_count = 0
                 checked_count = 0
                 
-                for asset_id, file_path in assets:
+                for asset_id, abs_path, current_path in assets:
                     checked_count += 1
-                    if not os.path.exists(file_path):
-                        # File no longer exists, remove it and its related data
+                    # Check if file exists at either the original path or current path
+                    file_exists = False
+                    actual_path = None
+                    
+                    if current_path and os.path.exists(current_path):
+                        file_exists = True
+                        actual_path = current_path
+                    elif os.path.exists(abs_path):
+                        file_exists = True
+                        actual_path = abs_path
+                        # Update current_path if file is at original location but current_path is different
+                        if current_path != abs_path:
+                            await db.execute(
+                                "UPDATE so_assets SET current_path = ? WHERE id = ?",
+                                (abs_path, asset_id)
+                            )
+                            logger.info(f"Updated current_path for asset {asset_id} to {abs_path}")
+                    
+                    if not file_exists:
+                        # File no longer exists at either path, remove it and its related data
                         try:
                             # Delete in correct order to avoid foreign key constraints
                             
@@ -857,7 +828,7 @@ async def perform_system_action(
                             )
                             
                             removed_count += 1
-                            logger.info(f"Removed missing asset and related data: {file_path}")
+                            logger.info(f"Removed missing asset and related data: {abs_path} (current: {current_path})")
                         except Exception as e:
                             logger.error(f"Failed to remove asset {asset_id}: {e}")
                 

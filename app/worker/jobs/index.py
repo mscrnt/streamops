@@ -50,10 +50,10 @@ class IndexJob:
         from app.api.db.database import get_db
         db = await get_db()
         
-        # Check if already indexed
+        # Check if already indexed at this path OR if this is a moved file
         cursor = await db.execute(
-            "SELECT id, mtime FROM so_assets WHERE abs_path = ?",
-            (file_path,)
+            "SELECT id, mtime FROM so_assets WHERE abs_path = ? OR current_path = ?",
+            (file_path, file_path)
         )
         existing = await cursor.fetchone()
         

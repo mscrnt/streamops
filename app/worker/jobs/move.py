@@ -129,25 +129,25 @@ class MoveJob(BaseJob):
                     WHERE id = ?
                 """, (output_path, asset_id))
                 logger.info(f"Updated asset {asset_id} current_path to {output_path}")
-                
-                # Emit move_completed event for history tracking
-                from app.api.services.asset_events import AssetEventService
-                await AssetEventService.emit_move_completed(asset_id, input_path, output_path)
             
             await conn.commit()
             await conn.close()
+            
+            # Emit move_completed event AFTER closing the database connection
+            if asset_id:
+                try:
+                    from app.api.services.asset_events import AssetEventService
+                    await AssetEventService.emit_move_completed(asset_id, input_path, output_path)
+                except Exception as e:
+                    logger.warning(f"Failed to emit move event: {e}")
             logger.info(f"Updated job {job_id} with result in database")
         except Exception as e:
             logger.error(f"Failed to update job result in database: {e}")
         
-        # Reindex both source and destination folders after move
-        source_folder = os.path.dirname(input_path)
-        dest_folder = os.path.dirname(output_path)
-        
-        logger.info(f"Reindexing folders after move: source={source_folder}, dest={dest_folder}")
-        await self.reindex_folder_assets(source_folder)
-        if source_folder != dest_folder:  # Only reindex dest if different from source
-            await self.reindex_folder_assets(dest_folder)
+        # Skip folder reindexing - the asset's current_path was already updated above
+        # This avoids the expensive operation of scanning entire directories
+        # The file counts in folder views will update on next query
+        logger.info(f"Move completed, asset database updated")
         
         logger.info(f"Successfully moved to {output_path}")
         

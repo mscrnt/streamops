@@ -9,6 +9,7 @@ import logging
 from datetime import datetime
 
 from app.api.db.database import get_db
+from app.api.services.filesystem_service import FilesystemService
 
 logger = logging.getLogger(__name__)
 
@@ -40,31 +41,7 @@ class EnsureDirectoryResponse(BaseModel):
     exists: bool
 
 
-def safe_join(base: str, relative: str) -> Optional[str]:
-    """
-    Safely join a base path with a relative path, preventing directory traversal.
-    Returns None if the result would escape the base directory.
-    """
-    # Normalize the base path
-    base = os.path.abspath(base)
-    
-    # Handle empty relative path
-    if not relative or relative == ".":
-        return base
-    
-    # Clean the relative path
-    # Remove leading slashes to ensure it's relative
-    relative = relative.lstrip("/\\")
-    
-    # Join and normalize
-    joined = os.path.abspath(os.path.join(base, relative))
-    
-    # Check if the result is within the base directory
-    if not joined.startswith(base):
-        return None
-    
-    return joined
-
+# safe_join moved to FilesystemService
 
 async def get_mounted_roots(db) -> Dict[str, Dict[str, Any]]:
     """Get all mounted drive roots from database and environment"""
@@ -109,23 +86,7 @@ async def get_mounted_roots(db) -> Dict[str, Dict[str, Any]]:
     return roots
 
 
-def check_directory_writable(path: str) -> bool:
-    """Check if a directory is writable by attempting to create a temp file"""
-    try:
-        # Try to create a temporary file
-        test_file = os.path.join(path, f".streamops_write_test_{os.getpid()}")
-        
-        # Attempt to create and immediately delete
-        try:
-            with open(test_file, 'w') as f:
-                f.write("test")
-            os.unlink(test_file)
-            return True
-        except:
-            return False
-    except:
-        return False
-
+# check_directory_writable moved to FilesystemService
 
 @router.get("/list", response_model=DirectoryListResponse)
 async def list_directory(
@@ -146,7 +107,7 @@ async def list_directory(
         root_path = root["path"]
         
         # Safely join paths
-        abs_path = safe_join(root_path, path)
+        abs_path = FilesystemService.safe_join(root_path, path)
         if abs_path is None:
             raise HTTPException(status_code=400, detail="Path traversal detected")
         
@@ -176,7 +137,7 @@ async def list_directory(
                     # Check if writable (for directories)
                     writable = False
                     if is_dir:
-                        writable = check_directory_writable(item_path)
+                        writable = FilesystemService.check_directory_writable(item_path)
                     else:
                         writable = os.access(item_path, os.W_OK)
                     
@@ -199,7 +160,7 @@ async def list_directory(
             raise HTTPException(status_code=403, detail="Permission denied")
         
         # Check if current directory is writable
-        is_writable = check_directory_writable(abs_path)
+        is_writable = FilesystemService.check_directory_writable(abs_path)
         
         # Can navigate up if we're not at the root
         can_navigate_up = abs_path != root_path
@@ -237,7 +198,7 @@ async def ensure_directory(
         root_path = root["path"]
         
         # Safely join paths
-        abs_path = safe_join(root_path, request.path)
+        abs_path = FilesystemService.safe_join(root_path, request.path)
         if abs_path is None:
             raise HTTPException(status_code=400, detail="Path traversal detected")
         
@@ -257,7 +218,7 @@ async def ensure_directory(
                 raise HTTPException(status_code=500, detail=f"Failed to create directory: {e}")
         
         # Check if writable
-        writable = check_directory_writable(abs_path) if os.path.isdir(abs_path) else False
+        writable = FilesystemService.check_directory_writable(abs_path) if os.path.isdir(abs_path) else False
         
         return EnsureDirectoryResponse(
             absolute_path=abs_path,
@@ -296,7 +257,7 @@ async def validate_path(
         root_path = root["path"]
         
         # Safely join paths
-        abs_path = safe_join(root_path, path)
+        abs_path = FilesystemService.safe_join(root_path, path)
         if abs_path is None:
             return {
                 "valid": False,
@@ -325,7 +286,7 @@ async def validate_path(
             }
         
         # Check writability if required
-        writable = check_directory_writable(abs_path)
+        writable = FilesystemService.check_directory_writable(abs_path)
         if require_write and not writable:
             return {
                 "valid": False,

@@ -113,6 +113,84 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
+# Background task to monitor job updates and broadcast them
+job_monitor_task = None
+last_job_check = {}
+
+async def monitor_job_updates():
+    """Monitor database for job state changes and broadcast via WebSocket"""
+    global last_job_check
+    
+    while True:
+        try:
+            # Check for job updates every second
+            await asyncio.sleep(1)
+            
+            # Skip if no active connections
+            if not manager.active_connections:
+                continue
+            
+            # Get recent job updates from database
+            db = await get_db()
+            
+            # Query jobs updated in the last 2 seconds
+            cursor = await db.execute("""
+                SELECT j.id, j.type, j.state, j.asset_id, j.updated_at,
+                       a.filename as asset_name
+                FROM so_jobs j
+                LEFT JOIN so_assets a ON j.asset_id = a.id
+                WHERE j.updated_at > datetime('now', '-2 seconds')
+                ORDER BY j.updated_at DESC
+                LIMIT 20
+            """)
+            
+            jobs = await cursor.fetchall()
+            
+            for job in jobs:
+                job_id = job[0]
+                job_type = job[1]
+                job_state = job[2]
+                asset_id = job[3]
+                updated_at = job[4]
+                asset_name = job[5]
+                
+                # Check if this is a new update
+                if job_id not in last_job_check or last_job_check[job_id] != updated_at:
+                    last_job_check[job_id] = updated_at
+                    
+                    # Broadcast job update
+                    await manager.broadcast({
+                        "type": "job_update",
+                        "job": {
+                            "id": job_id,
+                            "type": job_type,
+                            "state": job_state,
+                            "asset_id": asset_id,
+                            "asset_name": asset_name,
+                            "updated_at": updated_at
+                        },
+                        "timestamp": datetime.utcnow().isoformat()
+                    })
+                    
+                    logger.debug(f"Broadcast job update: {job_id} -> {job_state}")
+            
+            # Clean up old entries from last_job_check
+            if len(last_job_check) > 100:
+                # Keep only the 50 most recent jobs
+                recent_ids = {job[0] for job in jobs}
+                last_job_check = {k: v for k, v in last_job_check.items() if k in recent_ids}
+                
+        except Exception as e:
+            logger.error(f"Error in job monitor: {e}")
+            await asyncio.sleep(5)  # Wait longer on error
+
+# Start the monitor task when the module loads
+def start_job_monitor():
+    global job_monitor_task
+    if job_monitor_task is None or job_monitor_task.done():
+        job_monitor_task = asyncio.create_task(monitor_job_updates())
+        logger.info("Started job update monitor task")
+
 @router.get("/", response_model=JobListResponse)
 async def list_jobs(
     status: Optional[str] = Query(None, description="Filter by status (all|queued|running|completed|failed|canceled|deferred)"),
@@ -758,6 +836,10 @@ async def clear_queue(db=Depends(get_db)):
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for real-time job updates"""
     await manager.connect(websocket)
+    
+    # Start the job monitor if it's not running
+    start_job_monitor()
+    
     try:
         # Send initial connection confirmation
         await websocket.send_json({
@@ -777,60 +859,6 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.error(f"WebSocket error: {e}")
         manager.disconnect(websocket)
 
-@router.get("/active", response_model=List[JobItem])
-async def get_active_jobs(
-    limit: int = Query(10, ge=1, le=100, description="Maximum number of jobs to return"),
-    db=Depends(get_db)
-) -> List[JobItem]:
-    """Get currently active (running or queued) jobs"""
-    try:
-        cursor = await db.execute("""
-            SELECT j.*, a.abs_path as asset_name
-            FROM so_jobs j
-            LEFT JOIN so_assets a ON j.asset_id = a.id
-            WHERE j.state IN ('running', 'queued', 'pending')
-            ORDER BY 
-                CASE j.state 
-                    WHEN 'running' THEN 1 
-                    WHEN 'queued' THEN 2 
-                    WHEN 'pending' THEN 3 
-                END,
-                j.updated_at DESC
-            LIMIT ?
-        """, (limit,))
-        
-        # Get column names
-        column_names = [description[0] for description in cursor.description]
-        rows = await cursor.fetchall()
-        
-        items = []
-        for row in rows:
-            # Convert row to dict
-            row_dict = dict(zip(column_names, row))
-            
-            # Parse payload for progress
-            payload = json.loads(row_dict.get('payload_json', '{}')) if row_dict.get('payload_json') else {}
-            progress = payload.get('progress', row_dict.get('progress', 0.0) or 0.0)
-            eta_sec = payload.get('eta_sec', None)
-            
-            items.append(JobItem(
-                id=row_dict.get('id', ''),
-                type=row_dict.get('type', ''),
-                asset_id=row_dict.get('asset_id'),
-                asset_name=os.path.basename(row_dict.get('asset_name', '')) if row_dict.get('asset_name') else None,
-                status=row_dict.get('state', row_dict.get('status', 'unknown')),
-                progress=progress * 100 if progress <= 1 else progress,
-                eta_sec=eta_sec,
-                created_at=row_dict.get('created_at', datetime.utcnow().isoformat()),
-                started_at=row_dict.get('started_at'),
-                finished_at=row_dict.get('finished_at'),
-                duration_sec=None,
-                error=row_dict.get('error')
-            ))
-        
-        return items
-    except Exception as e:
-        logger.error(f"Failed to get active jobs: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+# Duplicate get_active_jobs removed - using the one defined at line 333
 
 
