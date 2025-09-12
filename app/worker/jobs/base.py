@@ -143,3 +143,103 @@ class BaseJob(ABC):
             
         except Exception as e:
             logger.error(f"Failed to reindex folder {folder_path}: {e}")
+    
+    async def send_notification(self, event_type: str, data: Dict[str, Any]):
+        """Send notification for job event"""
+        try:
+            # Check if notifications are enabled
+            from app.api.services.settings_service import settings_service
+            settings = await settings_service.get_settings()
+            notif_settings = settings.get("notifications", {})
+            
+            if not notif_settings.get("enabled", False):
+                return
+            
+            # Check if this event type is enabled
+            event_key = f"events_{event_type.replace('.', '_')}"
+            if not notif_settings.get(event_key, False):
+                return
+            
+            # Initialize notification service
+            from app.api.notifications.service import notification_service
+            from app.api.notifications.providers.base import NotificationPriority
+            
+            # Build notification config from settings
+            config = {
+                "enabled": True,
+                "rules": {},
+                "templates": {}
+            }
+            
+            # Add enabled channels
+            channels = []
+            if notif_settings.get("discord_enabled") and notif_settings.get("discord_webhook_url"):
+                config["discord"] = {
+                    "enabled": True,
+                    "webhook_url": notif_settings["discord_webhook_url"],
+                    "username": notif_settings.get("discord_username", "StreamOps")
+                }
+                channels.append("discord")
+            
+            if notif_settings.get("email_enabled") and notif_settings.get("email_smtp_host"):
+                config["email"] = {
+                    "enabled": True,
+                    "smtp_host": notif_settings["email_smtp_host"],
+                    "smtp_port": notif_settings.get("email_smtp_port", 587),
+                    "smtp_user": notif_settings.get("email_smtp_user"),
+                    "smtp_pass": notif_settings.get("email_smtp_pass"),
+                    "from_email": notif_settings.get("email_from"),
+                    "to_emails": notif_settings.get("email_to", [])
+                }
+                channels.append("email")
+            
+            if notif_settings.get("twitter_enabled"):
+                config["twitter"] = {
+                    "enabled": True,
+                    "auth_type": notif_settings.get("twitter_auth_type", "bearer"),
+                    "bearer_token": notif_settings.get("twitter_bearer_token"),
+                    "api_key": notif_settings.get("twitter_api_key"),
+                    "api_secret": notif_settings.get("twitter_api_secret"),
+                    "access_token": notif_settings.get("twitter_access_token"),
+                    "access_secret": notif_settings.get("twitter_access_secret")
+                }
+                channels.append("twitter")
+            
+            if notif_settings.get("webhook_enabled") and notif_settings.get("webhook_endpoints"):
+                config["webhook"] = {
+                    "enabled": True,
+                    "endpoints": notif_settings["webhook_endpoints"]
+                }
+                channels.append("webhook")
+            
+            if not channels:
+                logger.debug("No notification channels enabled")
+                return
+            
+            # Set up rules for this event
+            config["rules"][event_type] = {
+                "channels": channels
+            }
+            
+            # Initialize and send
+            await notification_service.initialize(config)
+            
+            # Determine priority based on event type
+            priority = NotificationPriority.NORMAL
+            if "failed" in event_type:
+                priority = NotificationPriority.HIGH
+            elif "completed" in event_type:
+                priority = NotificationPriority.LOW
+            
+            results = await notification_service.send_event(
+                event_type=event_type,
+                data=data,
+                priority=priority
+            )
+            
+            for result in results:
+                if not result.success:
+                    logger.warning(f"Failed to send {event_type} notification via {result.channel}: {result.error}")
+                    
+        except Exception as e:
+            logger.error(f"Failed to send notification for {event_type}: {e}")

@@ -27,6 +27,9 @@ av==12.3.0
 obsws-python==1.7.0
 websockets==14.1
 
+# Security
+cryptography==43.0.3
+
 # Utilities
 pyyaml==6.0.2
 python-multipart==0.0.20

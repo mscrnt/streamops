@@ -121,48 +121,122 @@ async def apply_guardrails_internal(guardrails: Dict[str, Any]):
     os.environ["MIN_FREE_GB"] = str(guardrails.get("min_free_disk_gb", 10))
 
 
-@router.post("/notifications/test/email")
-async def test_email_notification(
-    smtp_server: str = Body(...),
-    smtp_port: int = Body(...),
-    from_email: str = Body(...),
-    password: str = Body(...)
+@router.post("/notifications/test/{channel}")
+async def test_notification_channel(
+    channel: str,
+    request: Request
 ) -> Dict[str, Any]:
-    """Test email notification settings"""
+    """Test a specific notification channel"""
     try:
-        # TODO: Implement actual email test
-        logger.info(f"Testing email to {from_email} via {smtp_server}:{smtp_port}")
+        import asyncio
+        from app.api.notifications import NotificationService, NotificationChannel
+        from app.api.notifications.service import notification_service
         
-        # For now, simulate success
-        return {
-            "ok": True,
-            "message": "Test email sent successfully"
+        # Force reload settings from disk to get latest config
+        await settings_service.load_settings()
+        
+        # Get current settings (unredacted for internal use)
+        settings = await settings_service.get_settings_internal()
+        notif_config = settings.get("notifications", {})
+        
+        # Initialize notification service with current config
+        config = {
+            "enabled": True
         }
+        
+        if channel == "discord":
+            config["discord"] = {
+                "enabled": True,
+                "webhook_url": notif_config.get("discord_webhook_url"),
+                "username": notif_config.get("discord_username", "StreamOps"),
+                "avatar_url": notif_config.get("discord_avatar_url")
+            }
+            channel_enum = NotificationChannel.DISCORD
+        elif channel == "email":
+            config["email"] = {
+                "enabled": True,
+                "smtp_host": notif_config.get("email_smtp_host"),
+                "smtp_port": notif_config.get("email_smtp_port"),
+                "smtp_user": notif_config.get("email_smtp_user"),
+                "smtp_pass": notif_config.get("email_smtp_pass"),
+                "from_email": notif_config.get("email_from"),
+                "to_emails": notif_config.get("email_to", []),
+                "use_tls": notif_config.get("email_use_tls", True),
+                "use_ssl": notif_config.get("email_use_ssl", False)
+            }
+            channel_enum = NotificationChannel.EMAIL
+        elif channel == "twitter":
+            config["twitter"] = {
+                "enabled": True,
+                "auth_type": notif_config.get("twitter_auth_type", "bearer"),
+                "bearer_token": notif_config.get("twitter_bearer_token"),
+                "api_key": notif_config.get("twitter_api_key"),
+                "api_secret": notif_config.get("twitter_api_secret"),
+                "access_token": notif_config.get("twitter_access_token"),
+                "access_secret": notif_config.get("twitter_access_secret")
+            }
+            channel_enum = NotificationChannel.TWITTER
+        elif channel == "webhook":
+            config["webhook"] = {
+                "enabled": True,
+                "endpoints": notif_config.get("webhook_endpoints", [])
+            }
+            channel_enum = NotificationChannel.WEBHOOK
+        else:
+            return {
+                "ok": False,
+                "message": f"Unknown channel: {channel}"
+            }
+        
+        # Create a fresh notification service instance for testing
+        # This ensures we use the latest config without caching issues
+        test_service = NotificationService()
+        await test_service.initialize(config)
+        
+        # Add timeout to prevent hanging
+        try:
+            result = await asyncio.wait_for(
+                test_service.test_channel(channel_enum),
+                timeout=10.0  # 10 second timeout
+            )
+        except asyncio.TimeoutError:
+            return {
+                "ok": False,
+                "message": "Test timed out after 10 seconds"
+            }
+        
+        return {
+            "ok": result.success,
+            "message": "Test notification sent successfully" if result.success else result.error,
+            "details": {
+                "channel": channel,
+                "timestamp": result.timestamp.isoformat() if result.timestamp else None,
+                "provider_message_id": result.provider_message_id
+            }
+        }
+        
     except Exception as e:
-        logger.error(f"Email test failed: {e}")
+        logger.error(f"Notification test failed for {channel}: {e}")
         return {
             "ok": False,
             "message": str(e)
         }
 
 
-@router.post("/notifications/test/webhook")
-async def test_webhook_notification(
-    url: str = Body(...)
-) -> Dict[str, Any]:
-    """Test webhook notification"""
-    try:
-        # TODO: Implement actual webhook test
-        logger.info(f"Testing webhook to {url}")
-        
-        # For now, simulate success
-        return {
-            "ok": True,
-            "message": "Test webhook sent successfully"
+@router.get("/notifications/events")
+async def get_notification_events() -> Dict[str, Any]:
+    """Get available notification events and their descriptions"""
+    from app.api.notifications.providers.base import NotificationEvent
+    
+    events = {}
+    for event in NotificationEvent:
+        events[event.value] = {
+            "name": event.value,
+            "description": event.value.replace('.', ' ').replace('_', ' ').title(),
+            "category": event.value.split('.')[0]
         }
-    except Exception as e:
-        logger.error(f"Webhook test failed: {e}")
-        return {
-            "ok": False,
-            "message": str(e)
-        }
+    
+    return {
+        "events": events,
+        "categories": list(set(e["category"] for e in events.values()))
+    }

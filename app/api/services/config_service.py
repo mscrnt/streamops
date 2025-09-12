@@ -7,6 +7,16 @@ import logging
 from pydantic import BaseModel
 from datetime import datetime
 
+try:
+    from app.api.utils.encryption import (
+        encrypt_sensitive_fields,
+        decrypt_sensitive_fields
+    )
+except ImportError:
+    # Fallback if encryption not available
+    def encrypt_sensitive_fields(data): return data
+    def decrypt_sensitive_fields(data): return data
+
 logger = logging.getLogger(__name__)
 
 class StreamOpsConfig(BaseModel):
@@ -72,6 +82,8 @@ class ConfigService:
                 try:
                     with open(self.config_path, 'r') as f:
                         data = json.load(f)
+                        # Decrypt sensitive fields
+                        data = decrypt_sensitive_fields(data)
                         # Extract custom config if present
                         if 'custom' in data:
                             self._custom_config = data.pop('custom')
@@ -98,14 +110,18 @@ class ConfigService:
                 **self.config.model_dump(),
                 "custom": self._custom_config
             }
+            # Encrypt sensitive fields before saving
+            encrypted_config = encrypt_sensitive_fields(all_config)
             with open(self.config_path, 'w') as f:
                 json.dump(
-                    all_config,
+                    encrypted_config,
                     f,
                     indent=2,
                     default=str
                 )
-            logger.info(f"Saved config to {self.config_path}")
+            # Secure the config file
+            os.chmod(self.config_path, 0o600)
+            logger.info(f"Saved encrypted config to {self.config_path}")
         except Exception as e:
             logger.error(f"Failed to save config: {e}")
     
@@ -180,8 +196,12 @@ class ConfigService:
                 **self.config.model_dump(),
                 "custom": self._custom_config
             }
+            # Encrypt sensitive fields before saving
+            encrypted_config = encrypt_sensitive_fields(all_config)
             with open(self.config_path, 'w') as f:
-                json.dump(all_config, f, indent=2, default=str)
-            logger.info(f"Saved all config to {self.config_path}")
+                json.dump(encrypted_config, f, indent=2, default=str)
+            # Secure the config file  
+            os.chmod(self.config_path, 0o600)
+            logger.info(f"Saved encrypted config to {self.config_path}")
         except Exception as e:
             logger.error(f"Failed to save config: {e}")

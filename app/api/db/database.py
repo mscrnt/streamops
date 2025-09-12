@@ -279,6 +279,50 @@ async def create_tables() -> None:
         )
     """)
     
+    # Notification tables
+    await _db.execute("""
+        CREATE TABLE IF NOT EXISTS so_notification_templates (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            channel TEXT NOT NULL,
+            event_type TEXT,
+            subject TEXT,
+            body TEXT NOT NULL,
+            variables_json TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    await _db.execute("""
+        CREATE TABLE IF NOT EXISTS so_notification_outbox (
+            id TEXT PRIMARY KEY,
+            event_type TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            channels_json TEXT NOT NULL,
+            status TEXT DEFAULT 'queued',
+            attempts INTEGER DEFAULT 0,
+            last_error TEXT,
+            next_attempt_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            processed_at TIMESTAMP
+        )
+    """)
+    
+    await _db.execute("""
+        CREATE TABLE IF NOT EXISTS so_notification_audit (
+            id TEXT PRIMARY KEY,
+            channel TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            provider_msg_id TEXT,
+            status TEXT NOT NULL,
+            request_json TEXT,
+            response_json TEXT,
+            error TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
     # Create indexes
     await _db.execute("CREATE INDEX IF NOT EXISTS idx_assets_path ON so_assets(abs_path)")
     await _db.execute("CREATE INDEX IF NOT EXISTS idx_assets_current_path ON so_assets(current_path)")
@@ -293,6 +337,11 @@ async def create_tables() -> None:
     await _db.execute("CREATE INDEX IF NOT EXISTS idx_rules_active ON so_rules(is_active)")
     await _db.execute("CREATE INDEX IF NOT EXISTS idx_rules_priority ON so_rules(priority)")
     await _db.execute("CREATE INDEX IF NOT EXISTS idx_obs_enabled ON so_obs_connections(enabled)")
+    
+    # Notification indexes
+    await _db.execute("CREATE INDEX IF NOT EXISTS idx_notif_outbox_status ON so_notification_outbox(status, next_attempt_at)")
+    await _db.execute("CREATE INDEX IF NOT EXISTS idx_notif_audit_channel ON so_notification_audit(channel, created_at)")
+    await _db.execute("CREATE INDEX IF NOT EXISTS idx_notif_audit_event ON so_notification_audit(event_type, created_at)")
     
     # Create FTS5 virtual table for full-text search
     await _db.execute("""

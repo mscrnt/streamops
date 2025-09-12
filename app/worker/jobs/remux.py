@@ -162,6 +162,17 @@ class RemuxJob(BaseJob):
         
         logger.info(f"Successfully remuxed to {output_path} ({output_size} bytes)")
         
+        # Send notification for job completion
+        await self.send_notification("job_completed", {
+            "job_type": "remux",
+            "job_id": job_id,
+            "asset_name": os.path.basename(input_path),
+            "input_path": input_path,
+            "output_path": output_path,
+            "output_size": output_size,
+            "output_format": output_format
+        })
+        
         # Emit remux completed event
         try:
             # Get asset_id from database

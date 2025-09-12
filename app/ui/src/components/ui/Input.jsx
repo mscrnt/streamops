@@ -80,4 +80,5 @@ export const FormField = ({
   </div>
 )
 
+export { Input }
 export default Input

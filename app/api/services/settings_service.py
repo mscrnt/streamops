@@ -9,6 +9,22 @@ from datetime import datetime
 import logging
 from pydantic import BaseModel, Field, validator
 from enum import Enum
+from typing import List
+
+try:
+    from app.api.utils.encryption import (
+        encrypt_sensitive_fields,
+        decrypt_sensitive_fields,
+        encryption_service
+    )
+    ENCRYPTION_ENABLED = True
+except ImportError:
+    # Fallback if encryption not available
+    ENCRYPTION_ENABLED = False
+    def encrypt_sensitive_fields(data):
+        return data
+    def decrypt_sensitive_fields(data):
+        return data
 
 logger = logging.getLogger(__name__)
 
@@ -58,19 +74,71 @@ class GuardrailSettings(BaseModel):
 
 
 class NotificationSettings(BaseModel):
+    enabled: bool = False
+    
+    # Discord settings
+    discord_enabled: bool = False
+    discord_webhook_url: str = ""
+    discord_username: str = "StreamOps"
+    discord_avatar_url: str = ""
+    
+    # Twitter/X settings
+    twitter_enabled: bool = False
+    twitter_auth_type: str = "bearer"  # "bearer" or "oauth1"
+    twitter_bearer_token: str = ""
+    twitter_api_key: str = ""
+    twitter_api_secret: str = ""
+    twitter_access_token: str = ""
+    twitter_access_secret: str = ""
+    
+    # Email settings
     email_enabled: bool = False
-    email_smtp_server: str = ""
+    email_smtp_host: str = ""
     email_smtp_port: int = 587
+    email_smtp_user: str = ""
+    email_smtp_pass: str = ""
     email_from: str = ""
-    email_password: str = ""
+    email_to: List[str] = Field(default_factory=list)
+    email_use_tls: bool = True
+    email_use_ssl: bool = False
     
+    # Webhook settings
     webhook_enabled: bool = False
-    webhook_url: str = ""
+    webhook_endpoints: List[Dict[str, Any]] = Field(default_factory=list)
     
+    # Event subscriptions - Jobs
+    events_job_started: bool = False
     events_job_completed: bool = True
     events_job_failed: bool = True
+    
+    # Event subscriptions - Recording
+    events_recording_created: bool = True
+    events_recording_started: bool = True
+    events_recording_stopped: bool = True
+    events_recording_processed: bool = True
+    events_recording_failed: bool = True
+    
+    # Event subscriptions - Streaming
+    events_stream_started: bool = True
+    events_stream_stopped: bool = True
+    events_stream_health_warning: bool = True
+    events_stream_health_critical: bool = True
+    events_stream_disconnected: bool = True
+    events_stream_reconnected: bool = True
+    
+    # Event subscriptions - OBS
+    events_obs_connected: bool = False
+    events_obs_disconnected: bool = True
+    events_obs_scene_changed: bool = False
+    events_obs_recording_started: bool = True
+    events_obs_recording_stopped: bool = True
+    events_obs_streaming_started: bool = True
+    events_obs_streaming_stopped: bool = True
+    
+    # Event subscriptions - System
+    events_storage_threshold: bool = True
     events_drive_offline: bool = True
-    events_system_error: bool = True
+    events_system_alert: bool = True
 
 
 class SecuritySettings(BaseModel):
@@ -108,9 +176,15 @@ class SettingsService:
     """Service for managing application settings"""
     
     def __init__(self):
-        self._settings_path = Path(os.getenv("CONFIG_PATH", "/data/config/settings.json"))
+        self._settings_path = Path(os.getenv("SETTINGS_PATH", "/data/settings.json"))
         self._settings: Optional[Settings] = None
         self._lock = asyncio.Lock()
+        
+        # Ensure the directory exists
+        try:
+            self._settings_path.parent.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            logger.warning(f"Could not create settings directory: {e}")
     
     async def load_settings(self) -> Settings:
         """Load settings from disk"""
@@ -119,6 +193,8 @@ class SettingsService:
                 try:
                     with open(self._settings_path) as f:
                         data = json.load(f)
+                        # Decrypt sensitive fields before creating Settings object
+                        data = decrypt_sensitive_fields(data)
                         self._settings = Settings(**data)
                 except Exception as e:
                     logger.error(f"Failed to load settings: {e}")
@@ -129,6 +205,14 @@ class SettingsService:
                 await self._save_settings_unlocked()
             
             return self._settings
+    
+    async def get_settings_internal(self) -> Dict[str, Any]:
+        """Get current settings as dict (internal use, unredacted)"""
+        if not self._settings:
+            await self.load_settings()
+        
+        # Return unredacted settings
+        return self._settings.dict()
     
     async def get_settings(self) -> Dict[str, Any]:
         """Get current settings as dict (with secrets redacted)"""
@@ -142,8 +226,21 @@ class SettingsService:
         if data["obs"]["password"]:
             data["obs"]["password"] = "*" * 8
         
-        if data["notifications"]["email_password"]:
-            data["notifications"]["email_password"] = "*" * 8
+        # Redact sensitive notification fields
+        if data["notifications"]["email_smtp_pass"]:
+            data["notifications"]["email_smtp_pass"] = "*" * 8
+        if data["notifications"]["twitter_bearer_token"]:
+            data["notifications"]["twitter_bearer_token"] = "*" * 8
+        if data["notifications"]["twitter_api_secret"]:
+            data["notifications"]["twitter_api_secret"] = "*" * 8
+        if data["notifications"]["twitter_access_secret"]:
+            data["notifications"]["twitter_access_secret"] = "*" * 8
+        if data["notifications"]["discord_webhook_url"] and "webhook" in data["notifications"]["discord_webhook_url"]:
+            # Partial redaction of Discord webhook URL
+            parts = data["notifications"]["discord_webhook_url"].split('/')
+            if len(parts) > 5:
+                parts[-1] = "*" * 8
+                data["notifications"]["discord_webhook_url"] = '/'.join(parts)
         
         if data["security"]["password_hash"]:
             data["security"]["password_hash"] = "*" * 8
@@ -156,7 +253,7 @@ class SettingsService:
             if not self._settings:
                 await self.load_settings()
             
-            # Get current data
+            # Get current data (already decrypted in memory)
             current_data = self._settings.dict()
             
             # Handle password fields specially - don't update if masked
@@ -166,8 +263,24 @@ class SettingsService:
                     updates["obs"]["password"] = current_data["obs"]["password"]
             
             if "notifications" in updates:
-                if updates["notifications"].get("email_password") == "*" * 8:
-                    updates["notifications"]["email_password"] = current_data["notifications"]["email_password"]
+                # Clean up Google App Passwords (remove spaces)
+                if updates["notifications"].get("email_smtp_pass") and updates["notifications"]["email_smtp_pass"] != "*" * 8:
+                    # Remove spaces from password (Google App Passwords come with spaces)
+                    cleaned_pass = updates["notifications"]["email_smtp_pass"].replace(" ", "").strip()
+                    updates["notifications"]["email_smtp_pass"] = cleaned_pass
+                    logger.info(f"Cleaned email password: removed spaces from {len(updates['notifications']['email_smtp_pass'])} to {len(cleaned_pass)} chars")
+                
+                # Restore redacted notification secrets
+                if updates["notifications"].get("email_smtp_pass") == "*" * 8:
+                    updates["notifications"]["email_smtp_pass"] = current_data["notifications"].get("email_smtp_pass", "")
+                if updates["notifications"].get("twitter_bearer_token") == "*" * 8:
+                    updates["notifications"]["twitter_bearer_token"] = current_data["notifications"].get("twitter_bearer_token", "")
+                if updates["notifications"].get("twitter_api_secret") == "*" * 8:
+                    updates["notifications"]["twitter_api_secret"] = current_data["notifications"].get("twitter_api_secret", "")
+                if updates["notifications"].get("twitter_access_secret") == "*" * 8:
+                    updates["notifications"]["twitter_access_secret"] = current_data["notifications"].get("twitter_access_secret", "")
+                if "*" in updates["notifications"].get("discord_webhook_url", ""):
+                    updates["notifications"]["discord_webhook_url"] = current_data["notifications"].get("discord_webhook_url", "")
             
             if "security" in updates:
                 if updates["security"].get("password_hash") == "*" * 8:
@@ -190,15 +303,28 @@ class SettingsService:
             # Ensure directory exists
             self._settings_path.parent.mkdir(parents=True, exist_ok=True)
             
+            # Get settings as dict and encrypt sensitive fields
+            data = self._settings.dict()
+            encrypted_data = encrypt_sensitive_fields(data)
+            
             # Write to temp file first (atomic write)
             temp_path = self._settings_path.with_suffix('.tmp')
             with open(temp_path, 'w') as f:
-                json.dump(self._settings.dict(), f, indent=2)
+                json.dump(encrypted_data, f, indent=2)
             
             # Atomic rename
             temp_path.replace(self._settings_path)
             
-            logger.info("Settings saved successfully")
+            # Try to set permissions (may fail in some environments)
+            try:
+                os.chmod(self._settings_path, 0o644)
+            except OSError:
+                pass  # Ignore permission errors
+            
+            if ENCRYPTION_ENABLED:
+                logger.info("Settings saved successfully with encryption")
+            else:
+                logger.info("Settings saved successfully (encryption not available)")
         
         except Exception as e:
             logger.error(f"Failed to save settings: {e}")

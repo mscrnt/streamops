@@ -19,4 +19,5 @@ const Label = forwardRef(({ className, htmlFor, children, ...props }, ref) => {
 
 Label.displayName = 'Label'
 
+export { Label }
 export default Label

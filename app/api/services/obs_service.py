@@ -66,6 +66,13 @@ class OBSService:
             self.connected = True
             logger.info(f"Connected to OBS WebSocket at {self.ws_url}")
             
+            # Send connection notification
+            await self._send_notification("obs_connected", {
+                "url": self.ws_url,
+                "profile": await self.get_current_profile(),
+                "scene": await self.get_current_scene()
+            })
+            
             # Start status update task in background
             asyncio.create_task(self._update_status())
             
@@ -80,11 +87,17 @@ class OBSService:
     async def disconnect(self):
         """Disconnect from OBS WebSocket"""
         self.auto_reconnect = False
+        was_connected = self.connected
         
         if self.event_client:
             self.event_client.disconnect()
         
         self.connected = False
+        
+        # Send disconnection notification if we were connected
+        if was_connected:
+            await self._send_notification("obs_disconnected", {})
+        
         logger.info("Disconnected from OBS WebSocket")
     
     async def _reconnect(self):
@@ -137,6 +150,13 @@ class OBSService:
                 self.current_session
             )
         
+        # Send notification
+        await self._send_notification("obs_recording_started", {
+            "session_id": self.current_session["id"],
+            "scene": self.current_session.get("scene_at_start"),
+            "profile": self.current_session.get("obs_profile")
+        })
+        
         # Trigger callbacks
         await self._trigger_callbacks("recording_started", self.current_session)
     
@@ -157,6 +177,13 @@ class OBSService:
             
             # Update session in database
             await self._update_session()
+            
+            # Send notification
+            await self._send_notification("obs_recording_stopped", {
+                "session_id": self.current_session["id"],
+                "duration_sec": duration,
+                "has_markers": len(self.current_session.get("markers", [])) > 0
+            })
             
             # Publish event
             if self.nats:
@@ -209,6 +236,12 @@ class OBSService:
             }
             self.current_session["markers"].append(marker)
         
+        # Send notification
+        await self._send_notification("obs_scene_changed", {
+            "scene": scene_name,
+            "recording": self.current_session is not None
+        })
+        
         if self.nats:
             await self.nats.publish_event(
                 "obs.scene.changed",
@@ -219,12 +252,21 @@ class OBSService:
         """Handle stream started event"""
         logger.info("OBS Stream started")
         
+        # Send notification
+        await self._send_notification("obs_streaming_started", {
+            "scene": await self.get_current_scene(),
+            "profile": await self.get_current_profile()
+        })
+        
         if self.nats:
             await self.nats.publish_event("obs.stream.started", {})
     
     async def _on_stream_stopped(self, data):
         """Handle stream stopped event"""
         logger.info("OBS Stream stopped")
+        
+        # Send notification
+        await self._send_notification("obs_streaming_stopped", {})
         
         if self.nats:
             await self.nats.publish_event("obs.stream.stopped", {})
@@ -453,3 +495,105 @@ class OBSService:
         except Exception as e:
             logger.error(f"Failed to test OBS connection: {e}")
             return False
+    
+    async def _send_notification(self, event_type: str, data: Dict[str, Any]):
+        """Send notification for OBS event"""
+        try:
+            # Check if notifications are enabled
+            from app.api.services.settings_service import settings_service
+            settings = await settings_service.get_settings()
+            notif_settings = settings.get("notifications", {})
+            
+            if not notif_settings.get("enabled", False):
+                return
+            
+            # Check if this event type is enabled
+            event_key = f"events_{event_type}"
+            if not notif_settings.get(event_key, False):
+                return
+            
+            # Initialize notification service
+            from app.api.notifications.service import notification_service
+            from app.api.notifications.providers.base import NotificationPriority
+            
+            # Build notification config from settings
+            config = {
+                "enabled": True,
+                "rules": {},
+                "templates": {}
+            }
+            
+            # Add enabled channels
+            channels = []
+            if notif_settings.get("discord_enabled") and notif_settings.get("discord_webhook_url"):
+                config["discord"] = {
+                    "enabled": True,
+                    "webhook_url": notif_settings["discord_webhook_url"],
+                    "username": notif_settings.get("discord_username", "StreamOps")
+                }
+                channels.append("discord")
+            
+            if notif_settings.get("email_enabled") and notif_settings.get("email_smtp_host"):
+                config["email"] = {
+                    "enabled": True,
+                    "smtp_host": notif_settings["email_smtp_host"],
+                    "smtp_port": notif_settings.get("email_smtp_port", 587),
+                    "smtp_user": notif_settings.get("email_smtp_user"),
+                    "smtp_pass": notif_settings.get("email_smtp_pass"),
+                    "from_email": notif_settings.get("email_from"),
+                    "to_emails": notif_settings.get("email_to", []),
+                    "use_tls": notif_settings.get("email_use_tls", True),
+                    "use_ssl": notif_settings.get("email_use_ssl", False)
+                }
+                channels.append("email")
+            
+            if notif_settings.get("twitter_enabled"):
+                config["twitter"] = {
+                    "enabled": True,
+                    "auth_type": notif_settings.get("twitter_auth_type", "bearer"),
+                    "bearer_token": notif_settings.get("twitter_bearer_token"),
+                    "api_key": notif_settings.get("twitter_api_key"),
+                    "api_secret": notif_settings.get("twitter_api_secret"),
+                    "access_token": notif_settings.get("twitter_access_token"),
+                    "access_secret": notif_settings.get("twitter_access_secret")
+                }
+                channels.append("twitter")
+            
+            if notif_settings.get("webhook_enabled") and notif_settings.get("webhook_endpoints"):
+                config["webhook"] = {
+                    "enabled": True,
+                    "endpoints": notif_settings["webhook_endpoints"]
+                }
+                channels.append("webhook")
+            
+            if not channels:
+                logger.debug("No notification channels enabled")
+                return
+            
+            # Set up rules for this event
+            config["rules"][event_type] = {
+                "channels": channels
+            }
+            
+            # Initialize and send
+            await notification_service.initialize(config)
+            
+            # Determine priority based on event type
+            priority = NotificationPriority.NORMAL
+            if "stopped" in event_type:
+                priority = NotificationPriority.LOW
+            elif "started" in event_type:
+                priority = NotificationPriority.HIGH
+            
+            results = await notification_service.send_event(
+                event_type=event_type,
+                data=data,
+                priority=priority
+            )
+            
+            for result in results:
+                if not result.success:
+                    logger.warning(f"Failed to send {event_type} notification via {result.channel}: {result.error}")
+                    
+        except Exception as e:
+            logger.error(f"Failed to send OBS notification for {event_type}: {e}")
