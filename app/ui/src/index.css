@@ -102,6 +102,14 @@
     outline-offset: 2px;
   }
   
+  /* Remove focus outline from tab panels and containers */
+  [role="tabpanel"]:focus,
+  [role="tabpanel"]:focus-visible,
+  .tabs-content:focus,
+  .tabs-content:focus-visible {
+    outline: none !important;
+  }
+  
   /* High contrast mode support */
   @media (prefers-contrast: high) {
     :root {
