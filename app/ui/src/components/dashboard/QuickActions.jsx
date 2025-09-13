@@ -1,14 +1,13 @@
 import { useState } from 'react'
 import { 
-  RefreshCw, 
+  FileText, 
   FolderSync, 
   PlayCircle,
   StopCircle,
   Trash2,
   Database,
   Zap,
-  AlertTriangle,
-  CheckCircle
+  AlertTriangle
 } from 'lucide-react'
 import Button from '@/components/ui/Button'
 import {
@@ -31,10 +30,10 @@ export default function QuickActions({ onAction, disabled }) {
   
   const actions = [
     {
-      id: 'restart_watchers',
-      label: 'Restart Watchers',
-      icon: RefreshCw,
-      description: 'Restart all drive watchers',
+      id: 'view_logs',
+      label: 'View Logs',
+      icon: FileText,
+      description: 'View system log files',
       variant: 'outline',
       requiresConfirm: false
     },
@@ -46,17 +45,23 @@ export default function QuickActions({ onAction, disabled }) {
       variant: 'outline',
       requiresConfirm: true,
       confirmTitle: 'Reindex All Recordings?',
-      confirmDescription: 'This will scan all configured drives and update the recordings database. This may take several minutes depending on the number of files.'
-    },
-    {
-      id: 'clear_completed_jobs',
-      label: 'Clear Completed',
-      icon: CheckCircle,
-      description: 'Remove completed jobs from history',
-      variant: 'outline',
-      requiresConfirm: true,
-      confirmTitle: 'Clear Completed Jobs?',
-      confirmDescription: 'This will permanently remove all completed jobs from the history. Failed and active jobs will be preserved.'
+      confirmDescription: (
+        <div className="space-y-3">
+          <p>This action will perform a full reindex of your media library:</p>
+          <ul className="list-disc list-inside space-y-1 text-sm">
+            <li>Scan all configured recording, editing, and archive drives</li>
+            <li>Update file metadata (size, duration, codecs)</li>
+            <li>Detect new files that were added outside StreamOps</li>
+            <li>Remove database entries for deleted files</li>
+            <li>Rebuild the search index</li>
+          </ul>
+          <div className="bg-blue-50 dark:bg-blue-950/50 border border-blue-200 dark:border-blue-800 rounded p-2 mt-3">
+            <p className="text-sm text-blue-800 dark:text-blue-200">
+              <strong>Duration:</strong> This may take several minutes depending on the number of files. The UI will remain responsive during indexing.
+            </p>
+          </div>
+        </div>
+      )
     },
     {
       id: 'clear_cache',
@@ -66,7 +71,32 @@ export default function QuickActions({ onAction, disabled }) {
       variant: 'outline',
       requiresConfirm: true,
       confirmTitle: 'Clear Cache?',
-      confirmDescription: 'This will delete all temporary cache files. This is safe but may cause temporary performance reduction while caches rebuild.'
+      confirmDescription: (
+        <div className="space-y-3">
+          <p>This action will clear the following temporary data:</p>
+          <ul className="list-disc list-inside space-y-1 text-sm">
+            <li>All files in /data/cache directory</li>
+            <li>Temporary FFmpeg working files in /tmp</li>
+            <li>Old rotated log files (keeps current logs and 1 backup)</li>
+          </ul>
+          <div className="bg-orange-50 dark:bg-orange-950/50 border border-orange-200 dark:border-orange-800 rounded p-2 mt-3">
+            <p className="text-sm text-orange-800 dark:text-orange-200">
+              <strong>What's preserved:</strong>
+            </p>
+            <ul className="list-disc list-inside text-sm mt-1">
+              <li>Current log files (*.log)</li>
+              <li>Most recent log backup (*.log.1)</li>
+              <li>All media files and recordings</li>
+              <li>Database and configuration</li>
+            </ul>
+          </div>
+          <div className="bg-green-50 dark:bg-green-950/50 border border-green-200 dark:border-green-800 rounded p-2">
+            <p className="text-sm text-green-800 dark:text-green-200">
+              <strong>Safe:</strong> This only removes temporary files. No important data will be lost.
+            </p>
+          </div>
+        </div>
+      )
     },
     {
       id: 'optimize_db',
@@ -142,8 +172,8 @@ export default function QuickActions({ onAction, disabled }) {
               <AlertTriangle className="h-5 w-5 text-yellow-500" />
               <span>{confirmDialog?.confirmTitle}</span>
             </DialogTitle>
-            <DialogDescription>
-              {confirmDialog?.confirmDescription}
+            <DialogDescription asChild>
+              <div>{confirmDialog?.confirmDescription}</div>
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

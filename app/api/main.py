@@ -7,7 +7,7 @@ import os
 import logging
 from pathlib import Path
 
-from app.api.routers import health, config, assets, jobs, rules, overlays, reports, drives, system, wizard, websocket, settings, guardrails, filesystem, obs, events, notifications
+from app.api.routers import health, config, assets, jobs, rules, overlays, reports, drives, system, wizard, websocket, settings, guardrails, filesystem, obs, events, notifications, logs
 from app.api.db.database import init_db, close_db, get_db
 from app.api.services.nats_service import NATSService
 from app.api.services.config_service import ConfigService
@@ -16,11 +16,8 @@ from app.overlay.server import overlay_handler, overlay_manager, sponsor_rotatio
 from app.overlay.renderer import overlay_renderer
 
 # Configure logging
-log_level = os.getenv("LOG_LEVEL", "INFO").upper()
-logging.basicConfig(
-    level=getattr(logging, log_level, logging.INFO),
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+from app.api.utils.logging_config import setup_logging
+setup_logging("api")
 logger = logging.getLogger(__name__)
 
 # Set uvicorn access logger to WARNING to reduce noise
@@ -194,6 +191,7 @@ app.include_router(settings.router, prefix="/api", tags=["settings"])
 app.include_router(obs.router, tags=["obs"])  # No prefix, it's already in the router
 app.include_router(events.router, tags=["events"])
 app.include_router(notifications.router, prefix="/api/notifications", tags=["notifications"])
+app.include_router(logs.router, prefix="/api/logs", tags=["logs"])
 
 # Main WebSocket endpoint for UI updates
 import asyncio

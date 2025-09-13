@@ -54,9 +54,10 @@ async def close_db() -> None:
 async def create_tables() -> None:
     """Create all database tables"""
     
-    # In prototype phase - drop existing tables to ensure clean schema
-    if os.getenv("PROTOTYPE_MODE", "true").lower() == "true":
-        logger.info("Prototype mode: Dropping existing tables for clean schema")
+    # Only drop tables if explicitly requested (for development)
+    # DEFAULT IS NOW FALSE TO PREVENT DATA LOSS
+    if os.getenv("PROTOTYPE_MODE", "false").lower() == "true":
+        logger.warning("PROTOTYPE_MODE enabled: Dropping ALL existing tables - DATA WILL BE LOST!")
         tables = [
             "so_assets_fts",  # Drop FTS table first
             "so_jobs", "so_sessions", "so_rules",

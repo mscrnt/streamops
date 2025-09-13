@@ -65,6 +65,7 @@ class WizardDefaults(BaseModel):
     recording_paths: List[str] = Field(..., description="Suggested recording paths")
     editing_paths: List[str] = Field(..., description="Suggested editing paths")
     obs_url: str = Field(..., description="Default OBS WebSocket URL")
+    obs_password: Optional[str] = Field(None, description="Default OBS WebSocket password")
     rules: List[Dict[str, Any]] = Field(..., description="Recommended rule presets")
     overlay_presets: List[Dict[str, Any]] = Field(..., description="Available overlay presets")
 
@@ -116,8 +117,9 @@ async def get_wizard_defaults() -> WizardDefaults:
         elif not editing_paths and os.path.exists("/mnt/drive_d"):
             editing_paths.append("/mnt/drive_d")
         
-        # Default OBS URL
-        obs_url = "ws://host.docker.internal:4455"
+        # Get OBS configuration from environment or use defaults
+        obs_url = os.getenv("OBS_WS_URL", "ws://host.docker.internal:4455")
+        obs_password = os.getenv("OBS_WS_PASSWORD", "")
         
         # Recommended rule presets
         rules = [
@@ -168,6 +170,7 @@ async def get_wizard_defaults() -> WizardDefaults:
             recording_paths=recording_paths,
             editing_paths=editing_paths,
             obs_url=obs_url,
+            obs_password=obs_password,
             rules=rules,
             overlay_presets=overlay_presets
         )

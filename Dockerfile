@@ -99,8 +99,8 @@ COPY --from=ui-builder /build/app/ui/dist ./app/static
 
 # Create necessary directories
 RUN mkdir -p /data/db /data/logs /data/cache /data/config \
-    && mkdir -p /var/lib/streamops/nats /var/log/streamops \
-    && chmod 755 /var/lib/streamops /var/log/streamops
+    && mkdir -p /var/lib/streamops/nats \
+    && chmod 755 /var/lib/streamops
 
 # Environment variables
 ENV PYTHONPATH=/opt/streamops \

@@ -16,10 +16,8 @@ from app.worker.jobs.copy import CopyJob
 from app.worker.watchers.drive_watcher import DriveWatcher
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+from app.api.utils.logging_config import setup_logging
+setup_logging("worker")
 logger = logging.getLogger(__name__)
 
 class Worker:

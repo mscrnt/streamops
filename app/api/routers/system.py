@@ -867,6 +867,75 @@ async def perform_system_action(
                 await db.rollback()
                 return {"ok": False, "message": f"Failed to reindex: {str(e)}"}
             
+        elif action == "clear_cache":
+            # Clear cache directory and rotate logs
+            import shutil
+            from pathlib import Path
+            
+            try:
+                cleared_items = []
+                total_freed = 0
+                
+                # Clear cache directory if it exists
+                cache_dir = Path("/data/cache")
+                if cache_dir.exists():
+                    for item in cache_dir.iterdir():
+                        try:
+                            if item.is_file():
+                                size = item.stat().st_size
+                                item.unlink()
+                                total_freed += size
+                            elif item.is_dir():
+                                size = sum(f.stat().st_size for f in item.rglob('*') if f.is_file())
+                                shutil.rmtree(item)
+                                total_freed += size
+                            cleared_items.append(f"Cache: {item.name}")
+                        except Exception as e:
+                            logger.warning(f"Failed to clear cache item {item}: {e}")
+                
+                # Clear old log files (keep current and 1 backup)
+                logs_dir = Path("/data/logs")
+                if logs_dir.exists():
+                    for log_file in logs_dir.glob("*.log.*"):
+                        # Skip the current log and .1 backup
+                        if not (log_file.name.endswith(".log") or log_file.name.endswith(".log.1")):
+                            try:
+                                size = log_file.stat().st_size
+                                log_file.unlink()
+                                total_freed += size
+                                cleared_items.append(f"Log: {log_file.name}")
+                            except Exception as e:
+                                logger.warning(f"Failed to clear log file {log_file}: {e}")
+                
+                # Clear any temporary FFmpeg files
+                tmp_files = list(Path("/tmp").glob("ffmpeg*")) if Path("/tmp").exists() else []
+                for tmp_file in tmp_files:
+                    try:
+                        if tmp_file.is_file():
+                            size = tmp_file.stat().st_size
+                            tmp_file.unlink()
+                            total_freed += size
+                            cleared_items.append(f"Temp: {tmp_file.name}")
+                    except Exception as e:
+                        logger.warning(f"Failed to clear temp file {tmp_file}: {e}")
+                
+                message = f"Cleared {len(cleared_items)} items, freed {total_freed / 1024 / 1024:.2f} MB"
+                if cleared_items:
+                    logger.info(f"Cache cleared: {', '.join(cleared_items[:5])}...")
+                
+                return {
+                    "ok": True,
+                    "message": message,
+                    "details": {
+                        "items_cleared": len(cleared_items),
+                        "space_freed_mb": round(total_freed / 1024 / 1024, 2)
+                    }
+                }
+                
+            except Exception as e:
+                logger.error(f"Failed to clear cache: {e}")
+                return {"ok": False, "message": f"Failed to clear cache: {str(e)}"}
+            
         elif action == "optimize_db":
             # Vacuum and optimize SQLite database
             try:

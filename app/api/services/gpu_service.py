@@ -93,7 +93,7 @@ class GPUService:
                     encoders = encoders_result[1]
                     if "h264_nvenc" in encoders or "hevc_nvenc" in encoders:
                         info["hw_encode_available"] = True
-                        logger.info("NVENC hardware encoding available")
+                        logger.debug("NVENC hardware encoding available")
                 
                 # Check for hardware decoders
                 decoders_result = await self._run_command(["ffmpeg", "-hide_banner", "-decoders"])
@@ -101,7 +101,7 @@ class GPUService:
                     decoders = decoders_result[1]
                     if "h264_cuvid" in decoders or "hevc_cuvid" in decoders:
                         info["hw_decode_available"] = True
-                        logger.info("NVDEC hardware decoding available")
+                        logger.debug("NVDEC hardware decoding available")
                 
                 # Check for hardware filters
                 filters_result = await self._run_command(["ffmpeg", "-hide_banner", "-filters"])
@@ -109,7 +109,7 @@ class GPUService:
                     filters = filters_result[1]
                     if "scale_cuda" in filters or "yadif_cuda" in filters:
                         info["hw_filters_available"] = True
-                        logger.info("CUDA filters available")
+                        logger.debug("CUDA filters available")
             else:
                 # Try AMD GPU detection
                 amd_result = await self._detect_amd_gpu()

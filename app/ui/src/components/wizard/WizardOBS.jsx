@@ -22,7 +22,7 @@ export default function WizardOBS({ data = {}, onChange, defaults }) {
   const [obsConfig, setObsConfig] = useState({
     enabled: data.enabled || false,
     url: data.url || defaults?.obs_url || 'ws://host.docker.internal:4455',
-    password: data.password || ''
+    password: data.password || defaults?.obs_password || ''
   })
   const [showPassword, setShowPassword] = useState(false)
   const [testResult, setTestResult] = useState(null)
