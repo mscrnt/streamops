@@ -610,7 +610,7 @@ async def get_system_summary(request: Request, db=Depends(get_db)) -> Dict[str, 
         job_24h = await cursor.fetchone()
         
         # Get OBS status - check for any connected instances
-        obs_info = {"connected": False, "version": None, "recording": False}
+        obs_info = {"connected": False, "version": None, "recording": False, "streaming": False}
         if hasattr(request.app.state, 'obs'):
             obs_manager = request.app.state.obs
             if obs_manager and hasattr(obs_manager, 'get_all_statuses'):
@@ -618,10 +618,12 @@ async def get_system_summary(request: Request, db=Depends(get_db)) -> Dict[str, 
                 statuses = await obs_manager.get_all_statuses()
                 any_connected = any(s.get("connected", False) for s in statuses.values())
                 any_recording = any(s.get("recording", False) for s in statuses.values())
+                any_streaming = any(s.get("streaming", False) for s in statuses.values())
                 obs_info = {
                     "connected": any_connected,
                     "version": "28.0.0",  # Would get from actual OBS
-                    "recording": any_recording
+                    "recording": any_recording,
+                    "streaming": any_streaming
                 }
             elif obs_manager and hasattr(obs_manager, 'connected'):
                 # Legacy single OBS support
@@ -630,25 +632,43 @@ async def get_system_summary(request: Request, db=Depends(get_db)) -> Dict[str, 
                     obs_info = {
                         "connected": True,
                         "version": "28.0.0",  # Would get from actual OBS
-                        "recording": status.get("recording", False)
+                        "recording": status.get("recording", False),
+                        "streaming": status.get("streaming", False)
                     }
         
         # Check guardrails
         guardrails_active = False
         guardrails_reason = None
         
-        config = request.app.state.config
-        if config:
-            guardrails_config = await config.get_config("guardrails", {})
-            if guardrails_config.get("pause_if_recording") and obs_info["recording"]:
+        # Get guardrails settings from settings service
+        from app.api.services.settings_service import SettingsService
+        settings_service = SettingsService()
+        await settings_service.load_settings()
+        settings = await settings_service.get_settings_internal()
+        guardrails_config = settings.get("guardrails", {})
+        
+        if guardrails_config:
+            # Check recording (settings uses pause_when_recording)
+            if guardrails_config.get("pause_when_recording") and obs_info.get("recording", False):
                 guardrails_active = True
                 guardrails_reason = "Recording in progress"
-            elif cpu_percent > guardrails_config.get("pause_if_cpu_pct_above", 70):
+            # Check streaming (settings uses pause_when_streaming)  
+            elif guardrails_config.get("pause_when_streaming") and obs_info.get("streaming", False):
                 guardrails_active = True
-                guardrails_reason = f"CPU above {guardrails_config.get('pause_if_cpu_pct_above')}%"
-            elif gpu_info["present"] and gpu_info["percent"] > guardrails_config.get("pause_if_gpu_pct_above", 40):
+                guardrails_reason = "Streaming in progress"
+            # Check CPU (settings uses cpu_threshold_pct)
+            elif cpu_percent and cpu_percent > guardrails_config.get("cpu_threshold_pct", 70):
                 guardrails_active = True
-                guardrails_reason = f"GPU above {guardrails_config.get('pause_if_gpu_pct_above')}%"
+                guardrails_reason = f"CPU above {guardrails_config.get('cpu_threshold_pct')}%"
+            # Check GPU (settings uses gpu_threshold_pct)
+            elif gpu_info["present"] and gpu_info.get("percent") is not None and gpu_info["percent"] > guardrails_config.get("gpu_threshold_pct", 40):
+                guardrails_active = True
+                guardrails_reason = f"GPU above {guardrails_config.get('gpu_threshold_pct')}%"
+            # Check disk space (settings uses min_free_disk_gb)
+            elif (disk.free / (1024**3)) < guardrails_config.get("min_free_disk_gb", 10):
+                guardrails_active = True
+                disk_free_gb = disk.free / (1024**3)
+                guardrails_reason = f"Disk space low: {disk_free_gb:.1f}GB free"
         
         return {
             "health": {"status": health_status, "reason": health_reason},

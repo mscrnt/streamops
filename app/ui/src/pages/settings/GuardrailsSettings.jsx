@@ -14,6 +14,7 @@ const GuardrailsSettings = () => {
   const [formData, setFormData] = useState({
     guardrails: {
       pause_when_recording: true,
+      pause_when_streaming: true,
       cpu_threshold_pct: 80,
       gpu_threshold_pct: 80,
       min_free_disk_gb: 10
@@ -170,6 +171,37 @@ const GuardrailsSettings = () => {
             </label>
             <p className="text-xs text-muted-foreground mt-1 ml-14">
               Automatically pause all processing jobs when OBS is actively recording
+            </p>
+          </div>
+          <Shield className="w-5 h-5 text-muted-foreground ml-4" />
+        </div>
+
+        {/* Pause When Streaming */}
+        <div className="flex items-start justify-between">
+          <div className="flex-1">
+            <label className="flex items-center cursor-pointer">
+              <input
+                type="checkbox"
+                checked={formData.guardrails.pause_when_streaming}
+                onChange={(e) => handleChange('pause_when_streaming', e.target.checked)}
+                className="sr-only"
+              />
+              <div className={cn(
+                "relative inline-flex h-6 w-11 items-center rounded-full transition",
+                formData.guardrails.pause_when_streaming 
+                  ? 'bg-primary' 
+                  : 'bg-muted'
+              )}>
+                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition ${
+                  formData.guardrails.pause_when_streaming ? 'translate-x-6' : 'translate-x-1'
+                }`} />
+              </div>
+              <span className="ml-3 text-sm font-medium">
+                Pause when streaming
+              </span>
+            </label>
+            <p className="text-xs text-muted-foreground mt-1 ml-14">
+              Automatically pause all processing jobs when OBS is actively streaming
             </p>
           </div>
           <Shield className="w-5 h-5 text-muted-foreground ml-4" />

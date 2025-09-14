@@ -68,6 +68,7 @@ class OBSSettings(BaseModel):
 
 class GuardrailSettings(BaseModel):
     pause_when_recording: bool = True
+    pause_when_streaming: bool = True
     cpu_threshold_pct: int = Field(80, ge=0, le=100)
     gpu_threshold_pct: int = Field(80, ge=0, le=100)
     min_free_disk_gb: int = Field(10, ge=1, le=1000)

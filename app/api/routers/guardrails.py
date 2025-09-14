@@ -179,12 +179,31 @@ async def check_guardrails_preflight(db=Depends(get_db)) -> Dict[str, Any]:
             "error": str(e)
         }
 
-# Load config from database on startup
+# Load config from settings service
 async def load_guardrails_config(db):
-    """Load guardrails config from database"""
+    """Load guardrails config from settings"""
     global _guardrails_config
     
-    # Use defaults if no db connection
+    try:
+        # Try to load from settings file first
+        from app.api.services.settings_service import SettingsService
+        settings_service = SettingsService()
+        await settings_service.load_settings()
+        settings = await settings_service.get_settings()
+        
+        if settings and settings.guardrails:
+            # Map settings to guardrails config
+            _guardrails_config.pause_if_recording = settings.guardrails.pause_when_recording
+            _guardrails_config.pause_if_streaming = settings.guardrails.pause_when_streaming
+            _guardrails_config.cpu_threshold_pct = settings.guardrails.cpu_threshold_pct
+            _guardrails_config.gpu_threshold_pct = settings.guardrails.gpu_threshold_pct
+            _guardrails_config.min_disk_gb = settings.guardrails.min_free_disk_gb
+            logger.info(f"Loaded guardrails from settings: recording={_guardrails_config.pause_if_recording}, streaming={_guardrails_config.pause_if_streaming}")
+            return
+    except Exception as e:
+        logger.debug(f"Could not load from settings service: {e}")
+    
+    # Fallback to database config
     if not db:
         logger.debug("No database connection, using default guardrails config")
         return
@@ -198,7 +217,7 @@ async def load_guardrails_config(db):
         if row and row[0]:
             config_dict = json.loads(row[0])
             _guardrails_config = GuardrailConfig(**config_dict)
-            logger.info(f"Loaded guardrails config: {config_dict}")
+            logger.info(f"Loaded guardrails config from db: {config_dict}")
         else:
             logger.debug("No guardrails config in database, using defaults")
     except Exception as e:
